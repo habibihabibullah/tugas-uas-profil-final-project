@@ -234,6 +234,20 @@ export default function App() {
       // UNUGHA Cilacap exact coordinates
       const unughaCoords = [-7.7188481, 109.023246];
       try {
+        // Fix Leaflet default icon path issues in Vite/Vercel production builds
+        try {
+          if (L && L.Icon && L.Icon.Default) {
+            delete L.Icon.Default.prototype._getIconUrl;
+            L.Icon.Default.mergeOptions({
+              iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+              iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+              shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+            });
+          }
+        } catch (iconPatchErr) {
+          console.warn("Could not patch Leaflet default marker icons:", iconPatchErr);
+        }
+
         mapInstance = L.map('leaflet-map', {
           center: unughaCoords,
           zoom: 14,
@@ -246,8 +260,24 @@ export default function App() {
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         }).addTo(mapInstance);
 
+        // Beautiful, responsive, zero-asset custom marker for UNUGHA
+        const unughaIcon = L.divIcon({
+          className: 'custom-unugha-marker-pin',
+          html: `<div class="relative flex items-center justify-center">
+            <!-- Pulsing outer ring -->
+            <div class="absolute w-8 h-8 rounded-full bg-emerald-500/30 animate-ping opacity-60"></div>
+            <!-- Outer border ring -->
+            <div class="relative w-5 h-5 rounded-full bg-emerald-600 border-2 border-white shadow-lg flex items-center justify-center">
+              <!-- Inner gold/amber core -->
+              <div class="w-1.5 h-1.5 rounded-full bg-amber-400"></div>
+            </div>
+          </div>`,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16]
+        });
+
         // Custom UNUGHA Marker
-        L.marker(unughaCoords).addTo(mapInstance)
+        L.marker(unughaCoords, { icon: unughaIcon }).addTo(mapInstance)
           .bindPopup(`
             <div class="text-slate-900 font-sans p-1">
               <p class="font-bold text-xs">UNUGHA Cilacap</p>
@@ -768,6 +798,24 @@ FAVORITE THINGS
     setTimeout(() => setIsCopied(false), 2000);
   };
 
+  // Instant Classmate/Visitor Login
+  const handleInstantClassroomLogin = () => {
+    const defaultUser = {
+      uid: 'semester-4-' + Date.now(),
+      displayName: 'Teman Semester 4 🎓',
+      email: 'semester4@unugha.ac.id',
+      isGoogle: false
+    };
+    localStorage.setItem('portfolio_demo_user', JSON.stringify(defaultUser));
+    setCurrentUser(defaultUser);
+    setNotification({
+      type: 'success',
+      message: 'Selamat datang! Anda berhasil masuk secara instan sebagai Teman Semester 4.'
+    });
+    triggerLocalNotification('Halo Teman Semester 4! 🎓', 'Terima kasih telah berkunjung ke portofolio saya.');
+    setIsLoginOpen(false);
+  };
+
   // Google Sign-In via Firebase Auth
   const handleGoogleLogin = async () => {
     try {
@@ -1074,7 +1122,13 @@ FAVORITE THINGS
                   
                   <p className="text-xs text-slate-300 font-medium max-w-sm pt-1">
                     Universitas Nahdlatul Ulama Al-Ghozali Cilacap
-                    <span className="block text-[10px] text-slate-400 font-mono mt-0.5">Semester 4 • Kelas Sore</span>
+                    <button
+                      onClick={handleInstantClassroomLogin}
+                      className="block mx-auto mt-1.5 text-[10px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 border border-emerald-500/20 hover:border-emerald-500/30 px-2 py-0.5 rounded-md font-mono transition-all duration-300 cursor-pointer shadow-sm group active:scale-95"
+                      title="Teman Semester 4? Klik disini untuk Login Instan tanpa Google!"
+                    >
+                      <span className="underline decoration-emerald-500/50 underline-offset-2">Semester 4 (Klik untuk Login Instan)</span>
+                    </button>
                   </p>
                   
                   <div className="pt-2 border-t border-slate-900/60">
@@ -1758,6 +1812,15 @@ FAVORITE THINGS
                     />
                   </svg>
                   <span>Login dengan Google</span>
+                </button>
+
+                {/* Instant Classmate Login Option */}
+                <button
+                  onClick={handleInstantClassroomLogin}
+                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 flex items-center justify-center gap-2 text-xs font-bold text-white transition-all active:scale-[0.98] cursor-pointer shadow-lg shadow-emerald-500/10"
+                >
+                  <Users className="w-4 h-4 text-emerald-100" />
+                  <span>Login Instan Semester 4 (Tanpa Google)</span>
                 </button>
 
                 <div className="relative flex py-1 items-center">
