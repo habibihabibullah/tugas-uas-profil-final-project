@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   User, 
+  Users,
   Plus, 
   Loader2, 
   AlertCircle, 
@@ -21,32 +22,75 @@ import {
   FileText,
   Smartphone,
   Phone,
-  Settings
+  Settings,
+  Download,
+  Share2,
+  Check,
+  Sparkles,
+  BookOpen,
+  MapPin,
+  Trash2,
+  Calendar,
+  Compass,
+  MessageSquare,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  Award,
+  Edit2,
+  LogIn,
+  LogOut,
+  Lock
 } from 'lucide-react';
-import { GuestbookMessage, ProjectItem, SkillItem, PortfolioConfig } from './types';
+import { GuestbookMessage, ProjectItem, SkillItem, PortfolioConfig, Article } from './types';
 import { 
   subscribeToGuestbook, 
   addGuestbookMessage, 
   subscribeToLikes, 
   incrementProjectLike,
   subscribeToConfig,
-  savePortfolioConfig
+  savePortfolioConfig,
+  subscribeToArticles,
+  addArticle,
+  updateArticle,
+  deleteArticle
 } from './lib/dbService';
+import { auth } from './lib/firebase';
+import { 
+  onAuthStateChanged, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  signOut,
+  signInAnonymously
+} from 'firebase/auth';
 
-// Import custom generated images
+// Import profile image from local assets
 import profileAvatar from './assets/images/profile_avatar_1782629622587.jpg';
-import projectAgritech from './assets/images/project_agritech_1782629638750.jpg';
-import projectElearning from './assets/images/project_elearning_1782629654102.jpg';
-import projectAkadcrud from './assets/images/project_akadcrud_1782629673745.jpg';
-
 
 export default function App() {
-  // Database states
+  // Database / Real-time states
   const [messages, setMessages] = useState<GuestbookMessage[]>([]);
+  const [articles, setArticles] = useState<Article[]>([]);
   const [likes, setLikes] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingArticles, setIsLoadingLoadingArticles] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmittingArticle, setIsSubmittingArticle] = useState(false);
   const [dbSource, setDbSource] = useState<'firebase' | 'local'>('local');
+
+  // Authentication states
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
+  const [demoLoginName, setDemoLoginName] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  
+  // Article edit states
+  const [editingArticleId, setEditingArticleId] = useState<string | null>(null);
+  const [editArticleTitle, setEditArticleTitle] = useState('');
+  const [editArticleContent, setEditArticleContent] = useState('');
+  const [isSubmittingEditArticle, setIsSubmittingEditArticle] = useState(false);
 
   // Track liked projects to prevent double-upvoting
   const [likedProjects, setLikedProjects] = useState<string[]>(() => {
@@ -58,16 +102,6 @@ export default function App() {
     }
   });
 
-  // Portfolio Configuration States (Dynamic GitHub & Live Deploy URLs)
-  const [portfolioConfig, setPortfolioConfig] = useState<PortfolioConfig>({
-    githubUrl: 'https://github.com/habibihabibullah/tugas-uas-profil-final-project',
-    deployUrl: window.location.origin
-  });
-  const [isEditingConfig, setIsEditingConfig] = useState(false);
-  const [editGithubUrl, setEditGithubUrl] = useState('');
-  const [editDeployUrl, setEditDeployUrl] = useState('');
-  const [isSavingConfig, setIsSavingConfig] = useState(false);
-
   // Network Status State
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -75,16 +109,17 @@ export default function App() {
   const [nama, setNama] = useState('');
   const [pesan, setPesan] = useState('');
 
-  // Form states (Contact Form - Async Submission demo)
+  // Form states (Article creation)
+  const [articleTitle, setArticleTitle] = useState('');
+  const [articleContent, setArticleContent] = useState('');
+
+  // Form states (Contact Form)
   const [contactNama, setContactNama] = useState('');
   const [contactEmail, setContactEmail] = useState('');
   const [contactPesan, setContactPesan] = useState('');
   const [isContactSubmitting, setIsContactSubmitting] = useState(false);
 
-  // Filter skills state
-  const [skillFilter, setSkillFilter] = useState<'all' | 'frontend' | 'backend' | 'tools'>('all');
-
-  // Notification / Alert message state
+  // Notification / Toast state
   const [notification, setNotification] = useState<{
     type: 'success' | 'error' | 'info';
     message: string;
@@ -93,20 +128,270 @@ export default function App() {
   // PWA & Push Notification permission state
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
 
-  // Track online/offline status
+  // Local clock state
+  const [currentTime, setCurrentTime] = useState<string>('');
+
+  // Copy status indicator
+  const [isCopied, setIsCopied] = useState(false);
+
+  // PWA Install prompt helpers
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  // Location / Geolocation tracker state
+  const [gpsError, setGpsError] = useState<string>('');
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  // Helper to update user marker and center map on the live instance
+  const updateUserMarker = (L: any, map: any, userCoords: { lat: number; lng: number }) => {
+    if (!L || !map) return;
+    try {
+      if ((window as any).userMarkerInstance) {
+        map.removeLayer((window as any).userMarkerInstance);
+      }
+      if ((window as any).userCircleInstance) {
+        map.removeLayer((window as any).userCircleInstance);
+      }
+
+      // Custom glowing blue pulsing icon using Tailwind classes
+      const userIcon = L.divIcon({
+        className: 'custom-user-marker',
+        html: `<div class="relative flex items-center justify-center">
+          <div class="absolute w-5 h-5 rounded-full bg-indigo-500 animate-ping opacity-60"></div>
+          <div class="relative w-3.5 h-3.5 rounded-full bg-indigo-600 border-2 border-white shadow-lg"></div>
+        </div>`,
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      });
+
+      const marker = L.marker([userCoords.lat, userCoords.lng], { icon: userIcon })
+        .addTo(map)
+        .bindPopup(`
+          <div class="text-slate-900 font-sans p-1">
+            <p class="font-bold text-xs">Lokasi Anda (Real-time)</p>
+            <p class="text-[9px] text-slate-500 font-mono">${userCoords.lat.toFixed(5)}, ${userCoords.lng.toFixed(5)}</p>
+          </div>
+        `);
+
+      const circle = L.circle([userCoords.lat, userCoords.lng], {
+        color: '#4f46e5',
+        fillColor: '#818cf8',
+        fillOpacity: 0.15,
+        radius: 120
+      }).addTo(map);
+
+      (window as any).userMarkerInstance = marker;
+      (window as any).userCircleInstance = circle;
+
+      // Smoothly pan map to user coordinates
+      map.setView([userCoords.lat, userCoords.lng], 15);
+    } catch (e) {
+      console.warn("Failed to update user marker:", e);
+    }
+  };
+
+  // Run updates when coords changes
+  useEffect(() => {
+    const L = (window as any).L;
+    const map = (window as any).leafletMapInstance;
+    if (L && map && coords) {
+      updateUserMarker(L, map, coords);
+    }
+  }, [coords]);
+
+  // Dynamic Leaflet Map setup and watchPosition tracking
+  useEffect(() => {
+    let mapInstance: any = null;
+    let watchId: number | null = null;
+
+    // 1. Load Leaflet CSS
+    let link = document.querySelector('link[href*="leaflet.css"]') as HTMLLinkElement;
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      link.crossOrigin = '';
+      document.head.appendChild(link);
+    }
+
+    const initMap = (L: any) => {
+      const container = document.getElementById('leaflet-map');
+      if (!container) return;
+
+      // Clean up any existing map container reference or state
+      if ((window as any).leafletMapInstance) {
+        try {
+          (window as any).leafletMapInstance.remove();
+        } catch (e) {
+          console.warn("Error removing old map instance from window:", e);
+        }
+        (window as any).leafletMapInstance = null;
+      }
+
+      if ((container as any)._leaflet_id !== undefined && (container as any)._leaflet_id !== null) {
+        (container as any)._leaflet_id = null;
+      }
+
+      // UNUGHA Cilacap exact coordinates
+      const unughaCoords = [-7.7188481, 109.023246];
+      try {
+        mapInstance = L.map('leaflet-map', {
+          center: unughaCoords,
+          zoom: 14,
+          zoomControl: true,
+          scrollWheelZoom: false
+        });
+        (window as any).leafletMapInstance = mapInstance;
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(mapInstance);
+
+        // Custom UNUGHA Marker
+        L.marker(unughaCoords).addTo(mapInstance)
+          .bindPopup(`
+            <div class="text-slate-900 font-sans p-1">
+              <p class="font-bold text-xs">UNUGHA Cilacap</p>
+              <p class="text-[10px] text-slate-500">Universitas Nahdlatul Ulama Al-Ghozali</p>
+            </div>
+          `);
+
+        // If coordinates already loaded prior to map initialization, apply user location immediately
+        if (coords) {
+          updateUserMarker(L, mapInstance, coords);
+        }
+      } catch (err) {
+        console.error("Map initialization failed:", err);
+      }
+    };
+
+    // Check if L is already available
+    const L = (window as any).L;
+    let script: HTMLScriptElement | null = null;
+    if (L) {
+      initMap(L);
+    } else {
+      // 2. Load Leaflet JS
+      script = document.createElement('script');
+      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      script.crossOrigin = '';
+      script.async = true;
+      script.onload = () => {
+        const LoadedL = (window as any).L;
+        if (LoadedL) {
+          initMap(LoadedL);
+        }
+      };
+      document.head.appendChild(script);
+    }
+
+    // Geolocation Real-time Tracking using watchPosition
+    if (navigator.geolocation) {
+      setGpsError(''); // clear default
+      watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          const newCoords = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          };
+          setCoords(newCoords);
+          setGpsError('');
+        },
+        (error) => {
+          let msg = 'Gagal melacak GPS perangkat.';
+          if (error.code === error.PERMISSION_DENIED) {
+            msg = 'Akses GPS ditolak. Silakan berikan izin lokasi di browser Anda.';
+          } else if (error.code === error.POSITION_UNAVAILABLE) {
+            msg = 'Posisi lokasi tidak tersedia.';
+          } else if (error.code === error.TIMEOUT) {
+            msg = 'Waktu permintaan lokasi habis.';
+          }
+          setGpsError(msg);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0
+        }
+      );
+    } else {
+      setGpsError('Geolocation tidak didukung oleh browser Anda.');
+    }
+
+    return () => {
+      // Cleanup watchPosition
+      if (watchId !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+      // Cleanup map instance
+      if (mapInstance) {
+        try {
+          mapInstance.remove();
+        } catch (e) {
+          // ignore
+        }
+      }
+      if ((window as any).leafletMapInstance) {
+        try {
+          (window as any).leafletMapInstance.remove();
+          (window as any).leafletMapInstance = null;
+        } catch (e) {
+          // ignore
+        }
+      }
+      if (script && document.head.contains(script)) {
+        try {
+          document.head.removeChild(script);
+        } catch (e) {
+          // ignore
+        }
+      }
+    };
+  }, []);
+
+  // Track Firebase Auth and Local Demo Auth
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setCurrentUser({
+          uid: user.uid,
+          displayName: user.displayName || 'Pengguna Google',
+          email: user.email,
+          photoURL: user.photoURL,
+          isGoogle: true
+        });
+        setIsAuthLoading(false);
+      } else {
+        const savedDemo = localStorage.getItem('portfolio_demo_user');
+        if (savedDemo) {
+          try {
+            setCurrentUser(JSON.parse(savedDemo));
+          } catch {
+            setCurrentUser(null);
+          }
+        } else {
+          setCurrentUser(null);
+        }
+        setIsAuthLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Track online/offline status, install prompt, and clock
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
       setNotification({
         type: 'success',
-        message: 'Koneksi kembali online! Mensinkronisasi database...'
+        message: 'Koneksi online aktif! Database berhasil disinkronisasi.'
       });
     };
     const handleOffline = () => {
       setIsOnline(false);
       setNotification({
         type: 'info',
-        message: 'Anda sedang offline. Aplikasi berjalan lancar dengan Cache PWA & Database Lokal!'
+        message: 'Mode offline aktif! Semua fitur berjalan lancar dengan Cache PWA.'
       });
     };
 
@@ -117,14 +402,68 @@ export default function App() {
       setNotificationPermission(Notification.permission);
     }
 
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    const updateTime = () => {
+      const now = new Date();
+      setCurrentTime(now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB');
+    };
+    updateTime();
+    const clockInterval = setInterval(updateTime, 1000);
+
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      clearInterval(clockInterval);
     };
   }, []);
 
-  // Request push notification permission
-  const requestNotificationPermission = async () => {
+  // Subscribe to Firestore Services on mount
+  useEffect(() => {
+    setIsLoading(true);
+    setIsLoadingLoadingArticles(true);
+
+    const unsubscribeGuestbook = subscribeToGuestbook(
+      (data, source) => {
+        setMessages(data);
+        setDbSource(source);
+        setIsLoading(false);
+      },
+      (err) => {
+        setIsLoading(false);
+        console.warn("Database reading offline:", err);
+      }
+    );
+
+    const unsubscribeArticles = subscribeToArticles(
+      (data) => {
+        setArticles(data);
+        setIsLoadingLoadingArticles(false);
+      },
+      (err) => {
+        setIsLoadingLoadingArticles(false);
+        console.warn("Articles reading offline:", err);
+      }
+    );
+
+    const unsubscribeLikes = subscribeToLikes((likesMap) => {
+      setLikes(likesMap);
+    });
+
+    return () => {
+      unsubscribeGuestbook();
+      unsubscribeArticles();
+      unsubscribeLikes();
+    };
+  }, []);
+
+  // Request notifications permission and send standard system notification
+  const handleRequestPushAndTrigger = async () => {
     if (!('Notification' in window)) {
       setNotification({
         type: 'error',
@@ -132,30 +471,31 @@ export default function App() {
       });
       return;
     }
+
     try {
       const permission = await Notification.requestPermission();
       setNotificationPermission(permission);
+      
       if (permission === 'granted') {
         setNotification({
           type: 'success',
-          message: 'Notifikasi Push PWA berhasil diaktifkan! 🔔'
+          message: 'Izin sistem aktif! Mengirimkan Push Notification...'
         });
         triggerLocalNotification(
-          'Notifikasi Aktif! 🔔', 
-          'Terima kasih telah mengaktifkan notifikasi di Portfolio Habibi.'
+          'Notifikasi Sistem Habibi! 🔔', 
+          'Halo! Anda baru saja menguji sistem notifikasi. Berjalan dengan lancar!'
         );
       } else {
         setNotification({
           type: 'error',
-          message: 'Izin notifikasi ditolak.'
+          message: 'Izin notifikasi ditolak oleh perangkat Anda.'
         });
       }
     } catch (err) {
-      console.error("Gagal meminta izin notifikasi:", err);
+      console.error(err);
     }
   };
 
-  // Helper to trigger standard or SW-based notification
   const triggerLocalNotification = async (title: string, body: string) => {
     try {
       if ('serviceWorker' in navigator && Notification.permission === 'granted') {
@@ -170,13 +510,8 @@ export default function App() {
         new Notification(title, { body });
       }
     } catch (err) {
-      console.warn("Notification fallback triggered:", err);
-      try {
-        if (Notification.permission === 'granted') {
-          new Notification(title, { body });
-        }
-      } catch (innerErr) {
-        console.error("Failed to trigger notification:", innerErr);
+      if (Notification.permission === 'granted') {
+        new Notification(title, { body });
       }
     }
   };
@@ -191,187 +526,102 @@ export default function App() {
     }
   }, [notification]);
 
-  // Subscribe to real-time Guestbook & Project Likes on mount
-  useEffect(() => {
-    setIsLoading(true);
-    
-    // Subscribe to Guestbook
-    const unsubscribeGuestbook = subscribeToGuestbook(
-      (data, source) => {
-        setMessages(data);
-        setDbSource(source);
-        setIsLoading(false);
-      },
-      (err) => {
-        setIsLoading(false);
-        console.warn("Database reading offline or slow:", err);
-      }
-    );
-
-    // Subscribe to Likes
-    const unsubscribeLikes = subscribeToLikes((likesMap) => {
-      setLikes(likesMap);
-    });
-
-    // Subscribe to Config
-    const unsubscribeConfig = subscribeToConfig((config) => {
-      setPortfolioConfig(config);
-      // Pre-fill edit fields
-      setEditGithubUrl(config.githubUrl);
-      setEditDeployUrl(config.deployUrl);
-    });
-
-    return () => {
-      unsubscribeGuestbook();
-      unsubscribeLikes();
-      unsubscribeConfig();
-    };
-  }, []);
-
-  // Handle posting a message to the Guestbook
-  const handlePostMessage = async (e: React.FormEvent) => {
+  // Add a new guestbook message
+  const handlePostGuestbook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nama.trim() || !pesan.trim()) {
       setNotification({
         type: 'error',
-        message: 'Mohon isi nama dan pesan Anda.'
+        message: 'Harap isi seluruh formulir buku tamu.'
       });
       return;
     }
 
     try {
       setIsSubmitting(true);
-      const result = await addGuestbookMessage({
+      await addGuestbookMessage({
         nama: nama.trim(),
         pesan: pesan.trim()
       });
 
-      // Clear fields
       setNama('');
       setPesan('');
 
       setNotification({
         type: 'success',
-        message: result.source === 'firebase'
-          ? 'Pesan berhasil diposting ke Cloud Database! (Synced) 🟢'
-          : 'Pesan disimpan di Offline Cache Lokal! (Akan disinkronisasi saat online) 🟡'
+        message: 'Pesan berhasil dipublikasikan di Buku Tamu!'
       });
 
-      // Trigger Service Worker Push Notification
-      triggerLocalNotification(
-        'Pesan Baru Terkirim! ✍️', 
-        `Terima kasih ${nama.trim()} telah mengisi Buku Tamu kami.`
-      );
-
-    } catch (err: any) {
+      triggerLocalNotification('Buku Tamu Diisi! ✍️', `Terima kasih ${nama.trim()} telah meninggalkan jejak.`);
+    } catch (err) {
       setNotification({
         type: 'error',
-        message: 'Gagal mengirim pesan: ' + (err.message || 'Error tidak diketahui')
+        message: 'Gagal mengirim pesan.'
       });
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Handle saving the custom links config
-  const handleSaveConfig = async (e: React.FormEvent) => {
+  // Add a new Article
+  const handlePostArticle = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editGithubUrl.trim() || !editDeployUrl.trim()) {
+    if (!articleTitle.trim() || !articleContent.trim()) {
       setNotification({
         type: 'error',
-        message: 'Mohon isi kedua URL dengan benar.'
+        message: 'Harap isi judul dan isi artikel.'
       });
       return;
     }
 
     try {
-      setIsSavingConfig(true);
-      await savePortfolioConfig({
-        githubUrl: editGithubUrl.trim(),
-        deployUrl: editDeployUrl.trim()
+      setIsSubmittingArticle(true);
+      await addArticle({
+        title: articleTitle.trim(),
+        content: articleContent.trim()
       });
+
+      setArticleTitle('');
+      setArticleContent('');
 
       setNotification({
         type: 'success',
-        message: 'Link Penilaian Tugas berhasil disimpan ke Cloud Firestore! 🟢'
+        message: 'Artikel baru berhasil diterbitkan!'
       });
 
-      setIsEditingConfig(false);
-
-      triggerLocalNotification(
-        'Link Portfolio Diperbarui! ⚙️',
-        'Repository GitHub dan Link Terdeploy berhasil disinkronkan.'
-      );
-    } catch (err: any) {
+      triggerLocalNotification('Artikel Baru Terbit! 📝', `Judul: ${articleTitle.trim()}`);
+    } catch (err) {
       setNotification({
         type: 'error',
-        message: 'Gagal menyimpan: ' + (err.message || 'Error tidak diketahui')
+        message: 'Gagal menerbitkan artikel.'
       });
     } finally {
-      setIsSavingConfig(false);
+      setIsSubmittingArticle(false);
     }
   };
 
-  // Handle liking a project (upvotes)
-  const handleLikeProject = async (projectId: string, projectTitle: string) => {
-    if (likedProjects.includes(projectId)) {
-      setNotification({
-        type: 'info',
-        message: `Anda sudah memberikan upvote untuk "${projectTitle}"! 😊`
-      });
-      return;
-    }
-
-    try {
-      const newCount = await incrementProjectLike(projectId);
-      
-      const updatedLiked = [...likedProjects, projectId];
-      setLikedProjects(updatedLiked);
-      try {
-        localStorage.setItem('portfolio_liked_projects', JSON.stringify(updatedLiked));
-      } catch (err) {
-        console.warn("localStorage quota or access error:", err);
-      }
-      
-      setNotification({
-        type: 'success',
-        message: `Terima kasih atas upvote Anda untuk "${projectTitle}"! ❤️`
-      });
-
-      triggerLocalNotification(
-        'Karya Diapresiasi! ❤️', 
-        `Anda menyukai project: ${projectTitle}. Total upvote sekarang: ${newCount}!`
-      );
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  // Handle Contact Form Submit (Async JS demonstration)
+  // Handle contact form submissions
   const handleContactSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!contactNama.trim() || !contactEmail.trim() || !contactPesan.trim()) {
       setNotification({
         type: 'error',
-        message: 'Mohon isi seluruh data kontak form.'
+        message: 'Mohon lengkapi data form kontak.'
       });
       return;
     }
 
     try {
       setIsContactSubmitting(true);
-      // Simulate real async API server processing with service worker trigger
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      // Simulate real asynchronous network dispatch
+      await new Promise((resolve) => setTimeout(resolve, 1200));
 
       setNotification({
         type: 'success',
-        message: `Terima kasih ${contactNama.trim()}! Pesan Anda berhasil dikirim secara async.`
+        message: `Terima kasih ${contactNama.trim()}! Pesan Anda berhasil dikirim.`
       });
 
-      triggerLocalNotification(
-        'Pesan Hubungi Kami Terkirim 📬',
-        `Pesan dari ${contactNama.trim()} sedang diproses oleh sistem.`
-      );
+      triggerLocalNotification('Kontak Terkirim! 📬', `Terima kasih telah menghubungi saya.`);
 
       setContactNama('');
       setContactEmail('');
@@ -379,807 +629,1208 @@ export default function App() {
     } catch (err) {
       setNotification({
         type: 'error',
-        message: 'Gagal mengirim formulir kontak.'
+        message: 'Gagal mengirim pesan kontak.'
       });
     } finally {
       setIsContactSubmitting(false);
     }
   };
 
-  // Static items for Portfolio
-  const projects: ProjectItem[] = [
-    {
-      id: 'agritech',
-      title: 'Smart Agri-Tech IoT Dashboard',
-      description: 'Aplikasi PWA monitoring kelembaban tanah & sistem irigasi otomatis real-time berbasis IoT dan Cloud Firestore.',
-      tags: ['React', 'Firebase', 'PWA', 'Tailwind CSS', 'IoT'],
-      likes: 12,
-      imageUrl: projectAgritech
-    },
-    {
-      id: 'elearning',
-      title: 'E-Learning & Interactive Quiz Platform',
-      description: 'Sistem pembelajaran online interaktif dilengkapi dengan real-time progress tracker, push notifications, dan offline course modules.',
-      tags: ['Vite', 'React', 'Firestore', 'Service Worker'],
-      likes: 8,
-      imageUrl: projectElearning
-    },
-    {
-      id: 'akadcrud',
-      title: 'Sistem Informasi CRUD Mahasiswa PWA',
-      description: 'Sistem pengelolaan data mahasiswa terintegrasi dengan database Cloud Firestore, Service Worker Caching, dan Push Notification.',
-      tags: ['React', 'Cloud Firestore', 'Tailwind', 'Push API'],
-      likes: 15,
-      imageUrl: projectAkadcrud
+  // Download contact card as a standard vCard (.VCF)
+  const handleDownloadVCard = () => {
+    const vcardContent = `BEGIN:VCARD
+VERSION:3.0
+N:Nandes;Habibi;Habibullah;Hiroshi;
+FN:Habibi Habibullah Hiroshi Nandes
+TITLE:Web Developer & Informatics Student
+ORG:UNUGHA Cilacap
+TEL;TYPE=CELL,VOICE:+6285741027488
+EMAIL;TYPE=PREF,INTERNET:habibihabibullah136@gmail.com
+URL:https://profile-pwa.vercel.app/
+NOTE:Informatics Student at UNUGHA Cilacap. Web Developer, React & PWA Specialist.
+REV:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z
+END:VCARD`;
+
+    const blob = new Blob([vcardContent], { type: 'text/vcard;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'Habibi_Habibullah_Hiroshi_Nandes.vcf');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    setNotification({
+      type: 'success',
+      message: 'Kartu kontak (.vcf) berhasil dibuat dan diunduh! 🗂️'
+    });
+  };
+
+  // Download CV / Resume as formatted plain text (.TXT)
+  const handleDownloadCV = () => {
+    const cvText = `===========================================================
+               RESUME / CURRICULUM VITAE               
+===========================================================
+
+DATA PRIBADI
+------------
+Nama Lengkap : Habibi Habibullah Hiroshi Nandes
+Pekerjaan    : Mahasiswa Informatika & Web Developer
+Instansi     : Universitas Nahdlatul Ulama Al-Ghozali Cilacap (Semester 4)
+Email        : habibihabibullah136@gmail.com
+Telepon      : +62 857-4102-7488
+Pendidikan   : S1 Teknik Informatika - UNUGHA Cilacap
+
+TENTANG SAYA
+------------
+Halo, saya Habibi Habibullah Hiroshi Nandes, mahasiswa Informatika semester 4 di
+Universitas Nahdlatul Ulama Al-Ghozali Cilacap. Saya memiliki ketertarikan yang sangat
+besar di dunia teknologi, khususnya pada pengembangan web dan pemrograman. Saya sedang
+fokus mempelajari HTML, CSS, JavaScript, dan backend development untuk membangun aplikasi
+web modern yang responsif dan interaktif. Saya juga aktif mengembangkan logika pemrograman,
+sistem basis data, dan CRUD.
+
+KEAHLIAN / SKILL
+----------------
+- HTML5, CSS3, JavaScript ES6+
+- React.js / Vite
+- Tailwind CSS
+- Backend development basics (Node.js, Express)
+- Database (Firebase Firestore, LocalStorage caching)
+- Progressive Web Applications (PWA, Service Workers)
+
+HOBI
+----
+1. Main game
+2. Menonton YouTube
+3. Browsing internet
+4. Bersantai
+5. Olahraga (Futsal & Sepak Bola)
+
+TIGA GOALS UTAMA
+----------------
+1. Menjadi orang sukses
+2. Pengin menjadi orang yang berguna bagi nusa dan bangsa
+3. Mendapatkan nilai A dalam matakuliah web programming
+
+FAVORITE THINGS
+---------------
+- Olahraga Favorit  : Badminton, Rcl, Futsal, Joging
+- Film Terfavorit   : End Games, Amazing Spiderman 2, John Wick, Oppenheimer
+
+===========================================================
+    Unduhan Resmi Portfolio Habibi Habibullah Hiroshi Nandes
+===========================================================`;
+
+    const blob = new Blob([cvText], { type: 'text/plain;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'CV_Habibi_Habibullah_Hiroshi_Nandes.txt');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    setNotification({
+      type: 'success',
+      message: 'CV Profesional (.txt) berhasil diunduh! 📄'
+    });
+  };
+
+  // Trigger PWA Native Installation
+  const handleInstallPWA = async () => {
+    if (!deferredPrompt) {
+      setNotification({
+        type: 'info',
+        message: 'Aplikasi sudah terpasang atau gunakan opsi manual "Tambah ke Layar Utama" di browser Anda.'
+      });
+      return;
     }
-  ];
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setDeferredPrompt(null);
+      setNotification({
+        type: 'success',
+        message: 'Terima kasih telah memasang aplikasi portfolio PWA ini! 🎉'
+      });
+    }
+  };
 
-  const skills: SkillItem[] = [
-    { name: 'React / Next.js', level: 90, category: 'frontend' },
-    { name: 'Tailwind CSS / Framer Motion', level: 92, category: 'frontend' },
-    { name: 'Node.js / Express', level: 85, category: 'backend' },
-    { name: 'Cloud Firestore / Firebase', level: 88, category: 'backend' },
-    { name: 'Git & GitHub Workflows', level: 86, category: 'tools' },
-    { name: 'PWA / Service Workers', level: 85, category: 'tools' }
-  ];
+  // Copy shareable link
+  const handleCopyShare = () => {
+    navigator.clipboard.writeText(window.location.href);
+    setIsCopied(true);
+    setNotification({
+      type: 'success',
+      message: 'Link disalin ke clipboard! Bagikan profil ini. 🔗'
+    });
+    setTimeout(() => setIsCopied(false), 2000);
+  };
 
-  const filteredSkills = skills.filter(
-    (s) => skillFilter === 'all' || s.category === skillFilter
-  );
+  // Google Sign-In via Firebase Auth
+  const handleGoogleLogin = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      const result = await signInWithPopup(auth, provider);
+      if (result.user) {
+        setNotification({
+          type: 'success',
+          message: `Berhasil login sebagai ${result.user.displayName || 'User'}!`
+        });
+        setIsLoginOpen(false);
+      }
+    } catch (err: any) {
+      console.error("Google Login failed:", err);
+      setNotification({
+        type: 'error',
+        message: 'Gagal login Google (diblokir iframe/sandbox). Silakan gunakan opsi Login Pengunjung Demo!'
+      });
+    }
+  };
+
+  // Demo Sign-In (Local Admin bypass)
+  const handleDemoLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = demoLoginName.trim();
+    const password = loginPassword.trim();
+
+    if (!name || !password) {
+      setNotification({
+        type: 'error',
+        message: 'Username dan password wajib diisi!'
+      });
+      return;
+    }
+
+    if (password.length < 4) {
+      setNotification({
+        type: 'error',
+        message: 'Password minimal harus 4 karakter demi keamanan!'
+      });
+      return;
+    }
+
+    const demoUser = {
+      uid: 'demo-' + Date.now(),
+      displayName: name,
+      email: name.includes('@') ? name : `${name.toLowerCase()}@example.com`,
+      isGoogle: false
+    };
+    localStorage.setItem('portfolio_demo_user', JSON.stringify(demoUser));
+    setCurrentUser(demoUser);
+    setNotification({
+      type: 'success',
+      message: `Berhasil masuk sebagai ${name}! Sesi interaktif Anda telah aktif.`
+    });
+    setDemoLoginName('');
+    setLoginPassword('');
+    setIsLoginOpen(false);
+  };
+
+  // Logout
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (e) {
+      // ignore
+    }
+    localStorage.removeItem('portfolio_demo_user');
+    setCurrentUser(null);
+    setNotification({
+      type: 'info',
+      message: 'Sesi login telah diakhiri.'
+    });
+  };
+
+  // Edit article handler
+  const handleStartEditArticle = (art: Article) => {
+    setEditingArticleId(art.id);
+    setEditArticleTitle(art.title);
+    setEditArticleContent(art.content);
+  };
+
+  const handleSaveEditArticle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingArticleId) return;
+    if (!editArticleTitle.trim() || !editArticleContent.trim()) {
+      setNotification({
+        type: 'error',
+        message: 'Judul dan isi artikel tidak boleh kosong.'
+      });
+      return;
+    }
+
+    try {
+      setIsSubmittingEditArticle(true);
+      const success = await updateArticle(editingArticleId, editArticleTitle.trim(), editArticleContent.trim());
+      if (success) {
+        setNotification({
+          type: 'success',
+          message: 'Artikel berhasil diperbarui!'
+        });
+        setEditingArticleId(null);
+        setEditArticleTitle('');
+        setEditArticleContent('');
+      } else {
+        setNotification({
+          type: 'error',
+          message: 'Gagal memperbarui artikel.'
+        });
+      }
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: 'Gagal memperbarui artikel.'
+      });
+    } finally {
+      setIsSubmittingEditArticle(false);
+    }
+  };
+
+  // Delete article handler
+  const handleDeleteArticle = async (articleId: string) => {
+    if (!window.confirm('Apakah Anda yakin ingin menghapus artikel ini?')) {
+      return;
+    }
+
+    try {
+      const success = await deleteArticle(articleId);
+      if (success) {
+        setNotification({
+          type: 'success',
+          message: 'Artikel berhasil dihapus!'
+        });
+      } else {
+        setNotification({
+          type: 'error',
+          message: 'Gagal menghapus artikel.'
+        });
+      }
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: 'Gagal menghapus artikel.'
+      });
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-[#070b13] text-slate-100 font-sans selection:bg-indigo-500 selection:text-white">
+    <div className="min-h-screen bg-[#070914] text-slate-100 font-sans selection:bg-indigo-500 selection:text-white pb-8 relative overflow-x-hidden">
       
-      {/* Dynamic Header */}
-      <header className="sticky top-0 z-50 backdrop-blur-md bg-[#070b13]/85 border-b border-slate-900 transition-colors">
+      {/* Visual Ambient Blur Lights */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none -z-10">
+        <div className="absolute top-0 left-[-20%] w-[60%] h-[50%] rounded-full bg-indigo-900/15 blur-[140px]" />
+        <div className="absolute top-[35%] right-[-20%] w-[60%] h-[50%] rounded-full bg-purple-900/10 blur-[140px]" />
+        <div className="absolute bottom-[2%] left-[10%] w-[50%] h-[40%] rounded-full bg-emerald-950/15 blur-[120px]" />
+      </div>
+
+      {/* TOP NAVIGATION HEADER */}
+      <header className="sticky top-0 z-40 backdrop-blur-xl bg-[#070914]/80 border-b border-slate-900/80 transition-all duration-300">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-indigo-500 to-emerald-500 flex items-center justify-center font-bold text-white shadow-lg">
-              HH
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-full overflow-hidden border border-indigo-500/30 shadow-lg shadow-indigo-500/10">
+              <img 
+                src={profileAvatar} 
+                alt="Habibi Profile" 
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
             </div>
             <div>
-              <p className="font-bold text-white tracking-tight leading-tight">Habibi Habibullah</p>
-              <p className="text-[10px] text-slate-400 font-mono">Web Developer & PWA Specialist</p>
+              <p className="font-bold text-white tracking-tight text-xs leading-tight">Habibi Habibullah H.N.</p>
+              <p className="text-[9px] text-slate-400 font-mono">Informatics UNUGHA</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            {/* Connection Indicator */}
-            <div className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 border ${
-              isOnline 
-                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
-                : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-            }`}>
-              {isOnline ? (
-                <>
-                  <Wifi className="w-3.5 h-3.5" />
-                  <span>Online (Synced)</span>
-                </>
-              ) : (
-                <>
-                  <WifiOff className="w-3.5 h-3.5 animate-pulse" />
-                  <span>Offline Mode</span>
-                </>
-              )}
+          <div className="flex items-center gap-2">
+            {/* Realtime dynamic clock widget */}
+            <div className="flex items-center gap-1 px-2.5 py-1 bg-slate-950/60 border border-slate-900 rounded-lg text-[10px] font-mono text-indigo-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-ping" />
+              <span>{currentTime || 'Sistem Aktif'}</span>
             </div>
 
-            {/* PWA Badge */}
-            <span className="hidden sm:inline-block px-2.5 py-1 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-md text-xs font-bold uppercase tracking-wider">
-              PWA Ready
-            </span>
+            {/* Connection state */}
+            <div className={`px-2 py-1 rounded-lg text-[10px] font-semibold flex items-center gap-1 border ${
+              isOnline 
+                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
+                : 'bg-rose-500/10 text-rose-400 border-rose-500/20 animate-pulse'
+            }`}>
+              {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+            </div>
+
+            {/* Auth State Button */}
+            {currentUser ? (
+              <div className="flex items-center gap-2 pl-1 border-l border-slate-900">
+                <div className="hidden sm:flex flex-col items-end">
+                  <p className="text-[10px] font-bold text-white leading-tight">{currentUser.displayName}</p>
+                  <p className="text-[8px] text-slate-400 font-mono">Logged In</p>
+                </div>
+                {currentUser.photoURL ? (
+                  <img src={currentUser.photoURL} alt={currentUser.displayName} className="w-6 h-6 rounded-lg border border-slate-800" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="w-6 h-6 rounded-lg bg-indigo-600/30 border border-indigo-500/50 flex items-center justify-center text-[10px] font-bold text-indigo-400">
+                    {currentUser.displayName.charAt(0)}
+                  </div>
+                )}
+                <button
+                  onClick={handleLogout}
+                  title="Log Out"
+                  className="p-1.5 rounded-lg bg-slate-950/60 border border-slate-900 hover:bg-slate-900 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <LogOut className="w-3 h-3" />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setIsLoginOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-[10px] font-bold text-white rounded-lg transition-all pl-2.5 cursor-pointer"
+              >
+                <LogIn className="w-3 h-3" />
+                <span>Login</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
 
-      {/* Main Content Container */}
-      <main className="max-w-6xl mx-auto px-4 py-8 space-y-16">
-
-        {/* Floating Custom Notification Banner */}
-        <AnimatePresence>
-          {notification && (
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="fixed top-20 right-4 z-50 max-w-md"
-            >
-              <div className={`p-4 rounded-xl shadow-2xl border flex items-start gap-3 backdrop-blur-md ${
-                notification.type === 'success'
-                  ? 'bg-emerald-950/90 border-emerald-500/30 text-emerald-300'
-                  : notification.type === 'error'
-                  ? 'bg-rose-950/90 border-rose-500/30 text-rose-300'
-                  : 'bg-slate-900/95 border-slate-800 text-slate-300'
-              }`}>
-                {notification.type === 'success' ? (
-                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                ) : notification.type === 'error' ? (
-                  <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-                ) : (
-                  <Info className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
-                )}
-                <div>
-                  <p className="text-xs font-semibold">{notification.message}</p>
-                </div>
+      {/* TOAST SYSTEM */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="fixed top-20 right-4 left-4 z-50 max-w-sm mx-auto"
+          >
+            <div className={`p-4 rounded-xl shadow-2xl border flex items-start gap-3 backdrop-blur-xl ${
+              notification.type === 'success'
+                ? 'bg-emerald-950/90 border-emerald-500/30 text-emerald-200'
+                : notification.type === 'error'
+                ? 'bg-rose-950/90 border-rose-500/30 text-rose-200'
+                : 'bg-slate-900/95 border-slate-800 text-slate-200'
+            }`}>
+              {notification.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              ) : notification.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              ) : (
+                <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <p className="text-xs leading-relaxed font-medium">{notification.message}</p>
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* HERO SECTION */}
-        <section id="hero" className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center pt-4">
-          <div className="md:col-span-7 space-y-6">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-bold uppercase tracking-wider">
-              <Layers className="w-3.5 h-3.5" />
-              <span>Full-Stack & PWA Portfolio</span>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white leading-tight">
-              Hai, Saya <span className="bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-400 to-emerald-400">Habibi Habibullah</span>
-            </h1>
+      {/* MAIN LAYOUT (Single-View responsive layout structured perfectly like the mobile bio portfolio app) */}
+      <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
 
-            <p className="text-base sm:text-lg text-slate-300 leading-relaxed max-w-xl">
-              Saya adalah pengembang aplikasi web interaktif yang berfokus pada teknologi modern <span className="font-semibold text-white">React (Vite)</span>, integrasi database real-time <span className="font-semibold text-white">Cloud Firestore</span>, dan implementasi <span className="font-semibold text-white">Progressive Web Apps (PWA)</span> dengan integrasi Service Worker yang handal serta Push Notification.
-            </p>
-
-            {/* Quick Stats & Controls panel */}
-            <div className="p-4 rounded-2xl bg-slate-900/40 border border-slate-800/80 grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl">
-              <div>
-                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Sumber Sinkronisasi Database</p>
-                <p className="text-xs font-mono font-bold mt-1 flex items-center gap-1.5 text-white">
-                  {dbSource === 'firebase' ? (
-                    <>
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                      Cloud Firestore 🟢
-                    </>
-                  ) : (
-                    <>
-                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-                      Local Storage Cache 🟡
-                    </>
-                  )}
-                </p>
-              </div>
-
-              {/* Push Notification permission activator */}
-              <button
-                onClick={requestNotificationPermission}
-                className={`w-full px-3 py-2 border rounded-xl flex items-center justify-center gap-2 text-xs font-bold transition-all duration-300 cursor-pointer ${
-                  notificationPermission === 'granted'
-                    ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400 hover:bg-emerald-950/60'
-                    : 'bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-700 animate-pulse'
-                }`}
-              >
-                <span>
-                  {notificationPermission === 'granted' 
-                    ? '🔔 Notifikasi Aktif' 
-                    : '🔔 Aktifkan Push Notif'}
-                </span>
-              </button>
-            </div>
-
-            <div className="flex flex-wrap gap-4 pt-2">
-              <a 
-                href="#guestbook" 
-                className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/20 transition-all text-sm flex items-center gap-2"
-              >
-                <Send className="w-4 h-4" />
-                <span>Isi Buku Tamu</span>
-              </a>
-              <button 
-                onClick={() => {
-                  triggerLocalNotification('CV Diunduh! 📄', 'Mengunduh CV Habibi Habibullah secara virtual.');
-                  setNotification({
-                    type: 'success',
-                    message: 'CV virtual Anda berhasil disiapkan!'
-                  });
-                }}
-                className="px-6 py-3 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl font-bold transition-all text-sm flex items-center gap-2 cursor-pointer"
-              >
-                <FileText className="w-4 h-4" />
-                <span>Unduh CV</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Decorative Profile Card Grid */}
-          <div className="md:col-span-5 relative flex justify-center">
-            <div className="absolute inset-0 bg-gradient-to-tr from-indigo-500/20 to-purple-500/20 blur-3xl -z-10 rounded-full" />
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+          
+          {/* LEFT SIDEBAR COLUMN (Highly Structured & Aligned) */}
+          <div className="md:col-span-5 space-y-6">
             
-            <div className="w-full max-w-sm rounded-3xl bg-slate-900/60 border border-slate-800/80 p-6 shadow-xl space-y-6 backdrop-blur-sm">
-              <div className="flex items-center gap-4">
-                <div className="w-16 h-16 rounded-2xl overflow-hidden border border-indigo-500/30 bg-gradient-to-tr from-indigo-500 to-emerald-500 flex items-center justify-center font-extrabold text-xl text-white shadow-lg shrink-0 relative">
-                  <img 
-                    src={profileAvatar} 
-                    alt="Habibi Habibullah" 
-                    className="absolute inset-0 w-full h-full object-cover z-10"
-                    referrerPolicy="no-referrer"
-                  />
-                  <span className="z-0">HH</span>
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-white">Habibi Habibullah</h3>
-                  <p className="text-xs text-indigo-400 font-mono">Backend & PWA Specialist</p>
-                  <p className="text-[10px] text-slate-500 mt-0.5 font-mono">habibihabibullah136@gmail.com</p>
-                </div>
-              </div>
-
-              <div className="space-y-3 pt-2">
-                <div className="flex justify-between items-center text-xs p-2.5 bg-slate-950/40 rounded-xl border border-slate-900">
-                  <span className="text-slate-400 flex items-center gap-1.5"><Code className="w-3.5 h-3.5 text-indigo-400" /> Framework</span>
-                  <span className="font-bold text-white">React & Vite</span>
-                </div>
-                <div className="flex justify-between items-center text-xs p-2.5 bg-slate-950/40 rounded-xl border border-slate-900">
-                  <span className="text-slate-400 flex items-center gap-1.5"><Database className="w-3.5 h-3.5 text-emerald-400" /> Database</span>
-                  <span className="font-bold text-white">Cloud Firestore</span>
-                </div>
-                <div className="flex justify-between items-center text-xs p-2.5 bg-slate-950/40 rounded-xl border border-slate-900">
-                  <span className="text-slate-400 flex items-center gap-1.5"><Layers className="w-3.5 h-3.5 text-pink-400" /> Offline Sync</span>
-                  <span className="font-bold text-white">Service Worker PWA</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* SUBMISSION LINKS CONTROL CARD */}
-        <section id="links-submission" className="p-6 rounded-3xl bg-gradient-to-br from-slate-900/80 via-slate-900/50 to-indigo-950/20 border border-slate-800/80 shadow-2xl space-y-6 backdrop-blur-sm">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-900 pb-4">
-            <div>
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-[10px] font-bold uppercase tracking-wider mb-2">
-                <Code className="w-3.5 h-3.5" />
-                <span>Repository & URL Deploy</span>
-              </div>
-              <h2 className="text-xl font-bold text-white">Repository GitHub & URL Deploy</h2>
-              <p className="text-xs text-slate-400">Gunakan panel interaktif ini untuk menyimpan, menampilkan, dan menyalin link repository GitHub serta URL deploy yang tersinkronisasi di Firestore.</p>
-            </div>
-            
-            <button
-              id="btn-edit-penilaian"
-              onClick={() => setIsEditingConfig(!isEditingConfig)}
-              className="px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600/35 active:scale-95 text-xs font-bold rounded-xl border border-indigo-500/40 text-indigo-300 transition-all cursor-pointer flex items-center gap-2 shadow-lg shadow-indigo-500/10"
-            >
-              <Settings className="w-4 h-4 animate-[spin_8s_linear_infinite]" />
-              <span>{isEditingConfig ? 'Batal' : 'Repository GitHub & URL Deploy'}</span>
-            </button>
-          </div>
-
-          <AnimatePresence mode="wait">
-            {isEditingConfig ? (
-              <motion.form
-                key="edit-form"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                onSubmit={handleSaveConfig}
-                className="space-y-4 max-w-2xl bg-slate-950/40 p-4 rounded-2xl border border-slate-900"
-              >
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                      Link Repository GitHub
-                    </label>
-                    <input
-                      type="url"
-                      required
-                      value={editGithubUrl}
-                      onChange={(e) => setEditGithubUrl(e.target.value)}
-                      placeholder="https://github.com/username/repo..."
-                      className="w-full bg-slate-950/70 border border-slate-800 focus:border-indigo-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none transition-colors font-mono"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                      Link Website Terdeploy
-                    </label>
-                    <input
-                      type="url"
-                      required
-                      value={editDeployUrl}
-                      onChange={(e) => setEditDeployUrl(e.target.value)}
-                      placeholder="https://ais-dev-...run.app..."
-                      className="w-full bg-slate-950/70 border border-slate-800 focus:border-indigo-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none transition-colors font-mono"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-end pt-2">
-                  <button
-                    type="submit"
-                    disabled={isSavingConfig}
-                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-95 disabled:opacity-50 text-xs font-bold rounded-xl text-white shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2 cursor-pointer"
-                  >
-                    {isSavingConfig ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Menyimpan ke Firestore...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Database className="w-3.5 h-3.5" />
-                        <span>Simpan ke Cloud Firestore</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </motion.form>
-            ) : (
-              <motion.div
-                key="display-links"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="grid grid-cols-1 md:grid-cols-2 gap-4"
-              >
-                {/* GitHub Repo Card */}
-                <div className="p-4 rounded-2xl bg-slate-950/30 border border-slate-900 flex flex-col justify-between gap-4 hover:border-slate-800 transition-colors">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0">
-                      <Github className="w-5 h-5 text-indigo-400" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-white">Repository GitHub Tugas</h4>
-                      <p className="text-[10px] text-slate-500 font-mono mt-0.5 break-all">
-                        {portfolioConfig.githubUrl}
-                      </p>
-                      {portfolioConfig.githubUrl.includes('habibi-portfolio-pwa') && (
-                        <p className="text-[9px] text-amber-400/90 mt-1.5 leading-snug">
-                          ⚠️ Ini adalah link placeholder bawaan. Klik tombol <span className="font-semibold text-amber-300">"Edit Link Penilaian"</span> di atas untuk menggantinya dengan link repository GitHub asli Anda.
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <a
-                      href={portfolioConfig.githubUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex-1 py-2 px-3 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-xs font-bold text-center transition-all flex items-center justify-center gap-1.5"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>Kunjungi Repo</span>
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(portfolioConfig.githubUrl);
-                        setNotification({
-                          type: 'success',
-                          message: 'Link GitHub berhasil disalin ke papan klip! 📋'
-                        });
-                        triggerLocalNotification('Disalin! 📋', 'Link repository GitHub berhasil disalin.');
-                      }}
-                      className="px-3.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/15 hover:border-indigo-500/30 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                      title="Salin Link"
-                    >
-                      Salin Link
-                    </button>
-                  </div>
-                </div>
-
-                {/* Live Deploy Card */}
-                <div className="p-4 rounded-2xl bg-slate-950/30 border border-slate-900 flex flex-col justify-between gap-4 hover:border-slate-800 transition-colors">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0">
-                      <ExternalLink className="w-5 h-5 text-emerald-400" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-white">Link Live Terdeploy</h4>
-                      <p className="text-[10px] text-slate-500 font-mono mt-0.5 break-all">
-                        {portfolioConfig.deployUrl}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <a
-                      href={portfolioConfig.deployUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex-1 py-2 px-3 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/15 text-emerald-400 rounded-xl text-xs font-bold text-center transition-all flex items-center justify-center gap-1.5"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>Buka Website</span>
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(portfolioConfig.deployUrl);
-                        setNotification({
-                          type: 'success',
-                          message: 'Link URL terdeploy berhasil disalin ke papan klip! 📋'
-                        });
-                        triggerLocalNotification('Disalin! 📋', 'Link URL website yang terdeploy berhasil disalin.');
-                      }}
-                      className="px-3.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/15 hover:border-indigo-500/30 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                      title="Salin Link"
-                    >
-                      Salin Link
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </section>
-
-        {/* SKILLS SECTION */}
-        <section id="skills" className="space-y-6">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-900 pb-4">
-            <div>
-              <h2 className="text-2xl font-extrabold text-white">Keahlian & Teknologi</h2>
-              <p className="text-sm text-slate-400">Teknologi yang saya gunakan untuk membangun sistem.</p>
-            </div>
-
-            {/* Filter buttons */}
-            <div className="flex flex-wrap gap-2">
-              {(['all', 'frontend', 'backend', 'tools'] as const).map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => setSkillFilter(cat)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all capitalize cursor-pointer ${
-                    skillFilter === cat
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
-                      : 'bg-slate-900 hover:bg-slate-800 text-slate-400'
-                  }`}
+            {/* HERO HEADER BIOGRAPHY CARD */}
+            <section className="relative overflow-hidden rounded-2xl border border-slate-800/80 bg-gradient-to-b from-[#0e1124]/90 to-[#070914]/90 p-6 shadow-2xl backdrop-blur-xl transition-all duration-300 hover:border-indigo-500/20">
+              <div className="absolute top-0 right-0 p-3">
+                <button 
+                  onClick={handleCopyShare}
+                  className="p-2 rounded-xl bg-slate-950/60 border border-slate-900 text-slate-400 hover:text-white hover:bg-slate-900 transition-all cursor-pointer shadow-sm"
+                  title="Bagikan Profil"
                 >
-                  {cat === 'all' ? 'Semua' : cat}
+                  {isCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Share2 className="w-3.5 h-3.5" />}
                 </button>
-              ))}
-            </div>
-          </div>
+              </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <AnimatePresence mode="popLayout">
-              {filteredSkills.map((skill, index) => (
-                <motion.div
-                  key={skill.name}
-                  layout
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ duration: 0.2 }}
-                  className="p-4 rounded-2xl bg-slate-900/30 border border-slate-800/60 flex flex-col justify-between hover:border-slate-700/80 transition-all group"
-                >
-                  <div className="flex justify-between items-start gap-2">
-                    <span className="font-bold text-white text-sm group-hover:text-indigo-400 transition-colors">
-                      {skill.name}
-                    </span>
-                    <span className="text-xs font-mono font-bold text-indigo-400 bg-indigo-400/5 px-2 py-0.5 rounded border border-indigo-500/10 capitalize">
-                      {skill.category}
-                    </span>
-                  </div>
-
-                  <div className="mt-4 space-y-1.5">
-                    <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                      <span>Proficiency</span>
-                      <span>{skill.level}%</span>
-                    </div>
-                    <div className="h-1.5 bg-slate-950 rounded-full overflow-hidden">
-                      <motion.div 
-                        initial={{ width: 0 }}
-                        animate={{ width: `${skill.level}%` }}
-                        transition={{ duration: 0.8, delay: index * 0.05 }}
-                        className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500"
-                      />
-                    </div>
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
-        </section>
-
-        {/* PROJECTS SHOWCASE */}
-        <section id="projects" className="space-y-6">
-          <div className="border-b border-slate-900 pb-4">
-            <h2 className="text-2xl font-extrabold text-white">Project Unggulan & Showcase</h2>
-            <p className="text-sm text-slate-400">Tekan tombol hati (Like) untuk menguji integrasi basis data real-time Firestore secara langsung.</p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {projects.map((project) => (
-              <div 
-                key={project.id}
-                className="rounded-3xl bg-slate-900/20 border border-slate-800/80 overflow-hidden flex flex-col justify-between hover:border-slate-700/80 transition-all shadow-xl group"
-              >
-                <div>
-                  <div className="h-44 overflow-hidden relative border-b border-slate-900/60">
+              <div className="flex flex-col items-center text-center space-y-4">
+                {/* Custom Glowing Profile Image Container */}
+                <div className="relative">
+                  <div className="absolute inset-0 bg-gradient-to-tr from-indigo-500 to-purple-600 rounded-full blur-md opacity-60 animate-pulse" />
+                  <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-indigo-500/80 bg-[#0c1024] p-1 shadow-2xl relative z-10">
                     <img 
-                      src={project.imageUrl} 
-                      alt={project.title} 
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      src={profileAvatar} 
+                      alt="Habibi Habibullah" 
+                      className="w-full h-full object-cover rounded-full"
                       referrerPolicy="no-referrer"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent" />
-                    
-                    <div className="absolute bottom-3 right-3 text-[10px] font-mono text-slate-300 bg-slate-950/80 backdrop-blur-md border border-slate-800/80 px-2 py-0.5 rounded font-semibold tracking-wider uppercase">
-                      {project.id === 'agritech' ? 'IoT Platform' : project.id === 'elearning' ? 'LMS Webapp' : 'CRUD System'}
-                    </div>
-
-                    {/* Floating Tech Badges */}
-                    <div className="absolute top-3 left-3 flex flex-wrap gap-1">
-                      {project.tags.slice(0, 2).map((t) => (
-                        <span key={t} className="px-2 py-0.5 rounded bg-slate-950/80 border border-slate-800/50 backdrop-blur-md text-[9px] font-bold text-indigo-300 tracking-wide uppercase">
-                          {t}
-                        </span>
-                      ))}
-                    </div>
                   </div>
+                  <span className="absolute bottom-1 right-2 w-4.5 h-4.5 rounded-full bg-emerald-500 border-2 border-[#070914] z-20 flex items-center justify-center shadow-lg">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                  </span>
+                </div>
 
-                  <div className="p-5 space-y-3">
-                    <h3 className="text-base font-bold text-white group-hover:text-indigo-400 transition-colors leading-snug">
-                      {project.title}
-                    </h3>
-                    <p className="text-xs text-slate-400 leading-relaxed">
-                      {project.description}
+                {/* Profile Info */}
+                <div className="space-y-2 z-10">
+                  <h1 className="text-lg font-extrabold tracking-tight text-white sm:text-xl">
+                    Habibi Habibullah Hiroshi Nandes
+                  </h1>
+                  
+                  <span className="inline-block text-[10px] font-bold font-mono tracking-wider uppercase bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-3 py-1 rounded-full">
+                    Mahasiswa Informatika S1
+                  </span>
+                  
+                  <p className="text-xs text-slate-300 font-medium max-w-sm pt-1">
+                    Universitas Nahdlatul Ulama Al-Ghozali Cilacap
+                    <span className="block text-[10px] text-slate-400 font-mono mt-0.5">Semester 4 • Kelas Sore</span>
+                  </p>
+                  
+                  <div className="pt-2 border-t border-slate-900/60">
+                    <p className="text-[11px] text-slate-400 max-w-xs mx-auto leading-relaxed italic">
+                      "Memiliki minat besar di bidang teknologi dan pemrograman web modern."
                     </p>
                   </div>
                 </div>
+              </div>
+            </section>
 
-                <div className="p-5 pt-0 border-t border-slate-900/60 mt-auto flex items-center justify-between">
-                  {/* Real-time Likes Button */}
-                  <button
-                    onClick={() => handleLikeProject(project.id, project.title)}
-                    className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-all font-bold cursor-pointer ${
-                      likedProjects.includes(project.id)
-                        ? "text-white bg-rose-600/90 border-rose-500/80 shadow-md shadow-rose-600/20"
-                        : "text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border-rose-500/10 hover:border-rose-500/20 active:scale-90"
-                    }`}
-                  >
-                    <Heart className={`w-3.5 h-3.5 ${likedProjects.includes(project.id) ? 'fill-white text-white' : 'fill-rose-400 text-rose-400'}`} />
-                    <span>
-                      {likedProjects.includes(project.id) ? 'Upvoted' : 'Upvote'} ({likes[project.id] !== undefined ? likes[project.id] : project.likes})
-                    </span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      triggerLocalNotification('Membuka Project! 🚀', `Mengarahkan ke live demo project "${project.title}".`);
-                      setNotification({
-                        type: 'info',
-                        message: `Membuka simulasi live demo untuk "${project.title}"`
-                      });
-                    }}
-                    className="flex items-center gap-1 text-xs text-slate-400 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <span>Live Demo</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </button>
+            {/* EXPLICIT SAVING & DOWNLOAD SUITE */}
+            <section id="download-features" className="rounded-2xl border border-slate-800/80 bg-gradient-to-b from-[#0e1124]/60 to-[#070914]/60 p-5 shadow-xl backdrop-blur-xl transition-all duration-300 hover:border-indigo-500/20">
+              <div className="flex items-center gap-2.5 border-b border-slate-900/80 pb-3 mb-4">
+                <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+                  <Download className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">Pusat Download & Simpan</h3>
+                  <p className="text-[9px] text-slate-400 mt-0.5">Simpan kontak, unduh resume, atau pasang PWA.</p>
                 </div>
               </div>
-            ))}
+
+              <div className="grid grid-cols-3 gap-2.5">
+                {/* 1. vCard (.VCF) */}
+                <button
+                  onClick={handleDownloadVCard}
+                  className="p-3 bg-[#070914]/80 border border-slate-900 hover:border-emerald-500/30 rounded-xl flex flex-col items-center justify-center gap-1.5 text-center transition-all duration-300 hover:bg-slate-900/40 group cursor-pointer"
+                >
+                  <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-400 group-hover:scale-105 transition-transform shadow-inner">
+                    <User className="w-3.5 h-3.5" />
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-200">Kontak</span>
+                  <span className="text-[8px] text-slate-500 font-mono">.VCF Card</span>
+                </button>
+
+                {/* 2. Resume CV (.TXT) */}
+                <button
+                  onClick={handleDownloadCV}
+                  className="p-3 bg-[#070914]/80 border border-slate-900 hover:border-indigo-500/30 rounded-xl flex flex-col items-center justify-center gap-1.5 text-center transition-all duration-300 hover:bg-slate-900/40 group cursor-pointer"
+                >
+                  <div className="w-8 h-8 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-400 group-hover:scale-105 transition-transform shadow-inner">
+                    <FileText className="w-3.5 h-3.5" />
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-200">Unduh CV</span>
+                  <span className="text-[8px] text-slate-500 font-mono">Resume</span>
+                </button>
+
+                {/* 3. Install PWA */}
+                <button
+                  onClick={handleInstallPWA}
+                  className="p-3 bg-[#070914]/80 border border-slate-900 hover:border-purple-500/30 rounded-xl flex flex-col items-center justify-center gap-1.5 text-center transition-all duration-300 hover:bg-slate-900/40 group cursor-pointer"
+                >
+                  <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center text-purple-400 group-hover:scale-105 transition-transform shadow-inner">
+                    <Layers className="w-3.5 h-3.5" />
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-200">Simpan App</span>
+                  <span className="text-[8px] text-slate-500 font-mono">PWA</span>
+                </button>
+              </div>
+            </section>
+
+            {/* GOALS & FAVORITES GRID GROUP - Perfect visual balance */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-6">
+              
+              {/* MY TOP 3 GOALS */}
+              <section id="goals-section" className="rounded-2xl border border-slate-800/80 bg-[#0c0e1a]/40 p-5 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-indigo-500/10">
+                <div className="flex items-center gap-2.5 border-b border-slate-900/80 pb-3 mb-4">
+                  <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+                    <Compass className="w-4 h-4" />
+                  </div>
+                  <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">My Top 3 Goals</h2>
+                </div>
+                <div className="space-y-3">
+                  {[
+                    'Menjadi orang sukses',
+                    'Pengin menjadi orang yang berguna bagi nusa dan bangsa',
+                    'Mendapatkan nilai A dalam matakuliah web programming'
+                  ].map((goal, idx) => (
+                    <div key={idx} className="flex items-start gap-3">
+                      <div className="w-5 h-5 rounded-full bg-indigo-500/10 border border-indigo-500/25 flex items-center justify-center font-mono text-[9px] font-bold text-indigo-400 shrink-0 mt-0.5 shadow-sm">
+                        {idx + 1}
+                      </div>
+                      <p className="text-xs text-slate-300 font-medium leading-relaxed pt-0.5">{goal}</p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {/* FAVORITE THINGS */}
+              <section id="favorites-section" className="rounded-2xl border border-slate-800/80 bg-[#0c0e1a]/40 p-5 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-indigo-500/10">
+                <div className="flex items-center gap-2.5 border-b border-slate-900/80 pb-3 mb-4">
+                  <div className="p-1.5 rounded-lg bg-rose-500/10 text-rose-400">
+                    <Heart className="w-4 h-4" />
+                  </div>
+                  <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Favorite Things</h2>
+                </div>
+                
+                <div className="overflow-hidden border border-slate-900 rounded-xl shadow-inner">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 font-mono uppercase text-[9px] tracking-wider">
+                        <th className="p-3 font-extrabold text-indigo-400">Sport</th>
+                        <th className="p-3 font-extrabold text-indigo-400 border-l border-slate-900">Movie</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-900/60 bg-slate-950/20">
+                      {[
+                        { sport: 'Badminton', movie: 'End Games' },
+                        { sport: 'Rcl', movie: 'Amazing Spiderman 2' },
+                        { sport: 'Futsal', movie: 'John Wick' },
+                        { sport: 'Joging', movie: 'Oppenheimer' }
+                      ].map((row, idx) => (
+                        <tr key={idx} className="hover:bg-indigo-950/20 transition-all font-medium">
+                          <td className="p-3 text-slate-200">{row.sport}</td>
+                          <td className="p-3 text-slate-200 border-l border-slate-900">{row.movie}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+
+            {/* SISTEM PUSH NOTIFICATION */}
+            <section id="push-notif-checker" className="rounded-2xl border border-slate-800/80 bg-[#0c0e1a]/40 p-5 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-indigo-500/10 text-center">
+              <div className="flex items-center justify-center gap-2 pb-2.5 border-b border-slate-900/80 mb-3">
+                <div className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Sistem Push Notification</h2>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed max-w-xs mx-auto mb-4">
+                Uji responsivitas PWA dengan mengirimkan notifikasi instan langsung ke perangkat sistem Anda.
+              </p>
+              <button
+                onClick={handleRequestPushAndTrigger}
+                className="px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold text-xs rounded-xl shadow-lg shadow-indigo-500/15 active:scale-95 transition-all flex items-center justify-center gap-2 mx-auto cursor-pointer"
+              >
+                <span>🔔 Cek Notifikasi Sistem</span>
+              </button>
+            </section>
+
+          </div>
+
+          {/* RIGHT COLUMN */}
+          <div className="md:col-span-7 space-y-6">
+
+            {/* ROW 1: ABOUT & HOBBIES GRID - Saves huge vertical space with perfect same-height stretch */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 items-stretch">
+              
+              {/* TENTANG SAYA SECTION */}
+              <section id="about-section" className="rounded-2xl border border-slate-800/80 bg-[#0c0e1a]/40 p-5 shadow-xl backdrop-blur-md flex flex-col justify-between transition-all duration-300 hover:border-indigo-500/10">
+                <div>
+                  <div className="flex items-center gap-2.5 border-b border-slate-900/80 pb-3 mb-4">
+                    <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+                      <BookOpen className="w-4 h-4" />
+                    </div>
+                    <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Tentang Saya</h2>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed text-justify">
+                    Halo 👋, saya <strong>Habibi Habibullah</strong> mahasiswa Informatika semester 4 di Universitas Nahdlatul Ulama Al-Ghozali Cilacap. Saya memiliki ketertarikan di dunia teknologi, khususnya pada pengembangan web dan pemrograman. Saya sedang fokus belajar tentang HTML, CSS, JavaScript, dan backend development untuk membangun aplikasi web yang lebih modern dan interaktif. Saya juga sedang mengembangkan kemampuan dalam memahami logika pemrograman, database, dan sistem CRUD. Di luar dunia coding, saya juga memiliki beberapa hobi seperti olahraga (futsal dan sepak bola), serta aktivitas yang membantu menjaga keseimbangan hidup.
+                  </p>
+                </div>
+              </section>
+
+              {/* HOBI SAYA GRID */}
+              <section id="hobbies-section" className="rounded-2xl border border-slate-800/80 bg-[#0c0e1a]/40 p-5 shadow-xl backdrop-blur-md flex flex-col justify-between transition-all duration-300 hover:border-indigo-500/10">
+                <div>
+                  <div className="flex items-center gap-2.5 border-b border-slate-900/80 pb-3 mb-4">
+                    <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+                      <Award className="w-4 h-4" />
+                    </div>
+                    <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Hobi Saya</h2>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2.5">
+                    {[
+                      { title: 'Main Game', desc: 'Strategi & Koordinasi' },
+                      { title: 'Menonton YouTube', desc: 'Edukasi & Pemrograman' },
+                      { title: 'Browsing Internet', desc: 'Mencari teknologi terbaru' },
+                      { title: 'Bersantai', desc: 'Menjaga keseimbangan hidup' }
+                    ].map((hobby, idx) => (
+                      <div key={idx} className="p-3 rounded-xl bg-slate-950/40 border border-slate-900/80 flex flex-col justify-center hover:border-indigo-500/20 hover:bg-slate-950/70 transition-all duration-300">
+                        <h4 className="text-xs font-bold text-white leading-tight flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 inline-block shrink-0 shadow-sm shadow-indigo-500/50" />
+                          <span>{hobby.title}</span>
+                        </h4>
+                        <p className="text-[10px] text-slate-400 ml-3.5 mt-0.5 leading-normal">{hobby.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            {/* ROW 2: ARTICLES AND FORM GRID - Side-by-side on large screens with identical heights */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+              
+              {/* BUAT ARTIKEL SECTION */}
+              <section id="create-article" className="rounded-2xl border border-slate-800/80 bg-[#0c0e1a]/40 p-5 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-indigo-500/10">
+                <div className="flex items-center gap-2.5 border-b border-slate-900/80 pb-3 mb-4">
+                  <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+                    <Plus className="w-4 h-4" />
+                  </div>
+                  <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Buat Artikel Baru</h2>
+                </div>
+
+                <form onSubmit={handlePostArticle} className="space-y-4">
+                  <div>
+                    <label htmlFor="art-title" className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Judul Artikel</label>
+                    <input
+                      id="art-title"
+                      type="text"
+                      required
+                      value={articleTitle}
+                      onChange={(e) => setArticleTitle(e.target.value)}
+                      placeholder="Tulis judul artikel..."
+                      className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none transition-all duration-300"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="art-content" className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Isi Artikel</label>
+                    <textarea
+                      id="art-content"
+                      rows={4}
+                      required
+                      value={articleContent}
+                      onChange={(e) => setArticleContent(e.target.value)}
+                      placeholder="Tulis konten atau materi artikel disini..."
+                      className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none transition-all duration-300 resize-none"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isSubmittingArticle}
+                    className="w-full px-4 py-2.5 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 active:scale-[0.98] disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-indigo-500/10"
+                  >
+                    {isSubmittingArticle ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Mempublikasikan...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-3.5 h-3.5" />
+                        <span>Terbitkan Artikel</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              </section>
+
+              {/* ARTIKEL SAYA */}
+              <section id="articles-feed" className="rounded-2xl border border-slate-800/80 bg-[#0c0e1a]/40 p-5 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-indigo-500/10 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between border-b border-slate-900/80 pb-3 mb-4">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <span>Artikel Saya</span>
+                        <span className="text-[8px] bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider animate-pulse">
+                          Live
+                        </span>
+                      </h3>
+                    </div>
+                    <span className="text-[9px] text-slate-500 font-mono">Auto-Sync</span>
+                  </div>
+
+                  <div className="space-y-3.5 max-h-[305px] overflow-y-auto pr-1.5 custom-scrollbar">
+                    {isLoadingArticles ? (
+                      <div className="p-8 text-center text-slate-400 flex flex-col items-center justify-center gap-2.5 bg-slate-950/40 border border-slate-900/80 rounded-xl">
+                        <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+                        <p className="text-[10px] font-mono text-slate-400">Sinkronisasi artikel...</p>
+                      </div>
+                    ) : articles.length === 0 ? (
+                      <div className="p-8 text-center bg-slate-950/40 border border-slate-900/80 rounded-xl space-y-2">
+                        <p className="text-xs text-slate-300 font-bold">Belum ada artikel yang ditulis.</p>
+                        <p className="text-[10px] text-slate-500 leading-normal">Gunakan formulir disamping untuk memposting artikel perdana Anda.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3.5">
+                        {articles.map((art) => (
+                          editingArticleId === art.id ? (
+                            <form onSubmit={handleSaveEditArticle} key={art.id} className="p-4 rounded-xl bg-indigo-950/10 border border-indigo-500/25 space-y-3">
+                              <p className="text-[9px] font-bold text-indigo-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                                <span>Mengubah Artikel</span>
+                              </p>
+                              <div>
+                                <input
+                                  type="text"
+                                  required
+                                  value={editArticleTitle}
+                                  onChange={(e) => setEditArticleTitle(e.target.value)}
+                                  placeholder="Judul Artikel..."
+                                  className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs text-white focus:outline-none transition-colors font-semibold"
+                                />
+                              </div>
+                              <div>
+                                <textarea
+                                  rows={3}
+                                  required
+                                  value={editArticleContent}
+                                  onChange={(e) => setEditArticleContent(e.target.value)}
+                                  placeholder="Isi Artikel..."
+                                  className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs text-white focus:outline-none transition-colors resize-none text-justify"
+                                />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="submit"
+                                  disabled={isSubmittingEditArticle}
+                                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] disabled:opacity-50 text-white text-[10px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                                >
+                                  {isSubmittingEditArticle ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Check className="w-3.5 h-3.5" />
+                                  )}
+                                  <span>Simpan</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingArticleId(null)}
+                                  className="px-3 py-1.5 bg-slate-950/60 border border-slate-900 hover:bg-slate-900 text-slate-400 hover:text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer"
+                                >
+                                  Batal
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div key={art.id} className="p-4 rounded-xl bg-[#070914]/40 border border-slate-900 hover:border-indigo-500/20 transition-all duration-300 group">
+                              <div className="flex items-start justify-between gap-2 mb-2">
+                                <div className="space-y-1">
+                                  <h4 className="text-xs font-bold text-white leading-snug group-hover:text-indigo-400 transition-colors">{art.title}</h4>
+                                  <p className="text-[9px] font-mono text-slate-500">
+                                    {new Date(art.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                                  </p>
+                                </div>
+                                
+                                {/* Action Buttons */}
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <button
+                                    onClick={() => {
+                                      if (!currentUser) {
+                                        setNotification({
+                                          type: 'info',
+                                          message: 'Silakan Login terlebih dahulu untuk mengedit artikel!'
+                                        });
+                                        setIsLoginOpen(true);
+                                        return;
+                                      }
+                                      handleStartEditArticle(art);
+                                    }}
+                                    title={currentUser ? "Edit Artikel" : "Login untuk mengedit"}
+                                    className={`p-1.5 rounded-lg border text-xs transition-all flex items-center justify-center cursor-pointer ${
+                                      currentUser 
+                                        ? 'bg-[#070914]/80 border-slate-900 hover:border-indigo-500/30 text-indigo-400 hover:bg-slate-900' 
+                                        : 'bg-[#070914]/20 border-transparent text-slate-600 hover:text-indigo-400'
+                                    }`}
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      if (!currentUser) {
+                                        setNotification({
+                                          type: 'info',
+                                          message: 'Silakan Login terlebih dahulu untuk menghapus artikel!'
+                                        });
+                                        setIsLoginOpen(true);
+                                        return;
+                                      }
+                                      handleDeleteArticle(art.id);
+                                    }}
+                                    title={currentUser ? "Hapus Artikel" : "Login untuk menghapus"}
+                                    className={`p-1.5 rounded-lg border text-xs transition-all flex items-center justify-center cursor-pointer ${
+                                      currentUser 
+                                        ? 'bg-[#070914]/80 border-slate-900 hover:border-rose-500/30 text-rose-400 hover:bg-slate-900' 
+                                        : 'bg-[#070914]/20 border-transparent text-slate-600 hover:text-rose-400'
+                                    }`}
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </div>
+                              <p className="text-xs text-slate-300 leading-relaxed text-justify whitespace-pre-wrap mt-2.5 pt-2 border-t border-slate-900/40">{art.content}</p>
+                            </div>
+                          )
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            {/* ROW 3: GUESTBOOK & CONTACT GRID - Perfect alignment and height compression */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+              
+              {/* REAL-TIME BUKU TAMU (GUESTBOOK) */}
+              <section id="pwa-guestbook" className="rounded-2xl border border-slate-800/80 bg-[#0c0e1a]/40 p-5 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-indigo-500/10 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between border-b border-slate-900/80 pb-3 mb-4">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+                        <Users className="w-4 h-4" />
+                      </div>
+                      <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <span>Buku Tamu Interaktif</span>
+                        <span className="text-[8px] bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider">
+                          Live
+                        </span>
+                      </h3>
+                    </div>
+                    <span className="text-[9px] text-slate-500 font-mono">Firestore Sync</span>
+                  </div>
+
+                  <form onSubmit={handlePostGuestbook} className="space-y-4 mb-5">
+                    <div>
+                      <label htmlFor="guest-nama" className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        Nama Anda
+                      </label>
+                      <input
+                        id="guest-nama"
+                        type="text"
+                        required
+                        value={nama}
+                        onChange={(e) => setNama(e.target.value)}
+                        placeholder="Masukkan nama lengkap..."
+                        className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none transition-all duration-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="guest-pesan" className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        Isi Pesan
+                      </label>
+                      <textarea
+                        id="guest-pesan"
+                        rows={2}
+                        required
+                        value={pesan}
+                        onChange={(e) => setPesan(e.target.value)}
+                        placeholder="Tulis pesan atau masukan Anda..."
+                        className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none transition-all duration-300 resize-none"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-indigo-500/10"
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Mengirim...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Send className="w-3.5 h-3.5" />
+                          <span>Kirim Pesan Buku Tamu</span>
+                        </>
+                      )}
+                    </button>
+                  </form>
+
+                  {/* Guestbook entries list */}
+                  <div className="space-y-3 max-h-64 overflow-y-auto pr-1.5 custom-scrollbar border-t border-slate-900/60 pt-4">
+                    {isLoading ? (
+                      <div className="p-6 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
+                        <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+                        <p className="text-[10px] font-mono text-slate-500">Sinkronisasi pesan...</p>
+                      </div>
+                    ) : messages.length === 0 ? (
+                      <p className="text-[11px] text-slate-500 text-center py-4 font-mono">Belum ada pesan di Buku Tamu.</p>
+                    ) : (
+                      messages.map((msg) => (
+                        <div key={msg.id} className="p-3 bg-slate-950/40 border border-slate-900/80 rounded-xl space-y-1 hover:border-indigo-500/10 transition-colors">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-bold text-indigo-400">{msg.nama}</p>
+                            <span className="text-[8px] font-mono text-slate-500">
+                              {new Date(msg.createdAt).toLocaleDateString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-300 leading-normal">{msg.pesan}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              {/* CONTACT US FORM WIDGET */}
+              <section id="contact-us" className="rounded-2xl border border-slate-800/80 bg-[#0c0e1a]/40 p-5 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-indigo-500/10 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center gap-2.5 border-b border-slate-900/80 pb-3 mb-4">
+                    <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+                      <Mail className="w-4 h-4" />
+                    </div>
+                    <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Let's Connect</h3>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed mb-4">
+                    Terima kasih telah mengunjungi website profil saya. Silakan hubungi saya untuk kolaborasi atau sekedar menyapa!
+                  </p>
+
+                  <form onSubmit={handleContactSubmit} className="space-y-4">
+                    <div>
+                      <label htmlFor="contact-nama" className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        Nama Lengkap
+                      </label>
+                      <input
+                        id="contact-nama"
+                        type="text"
+                        required
+                        value={contactNama}
+                        onChange={(e) => setContactNama(e.target.value)}
+                        placeholder="Masukkan nama..."
+                        className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none transition-all duration-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="contact-email" className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        Alamat Email
+                      </label>
+                      <input
+                        id="contact-email"
+                        type="email"
+                        required
+                        value={contactEmail}
+                        onChange={(e) => setContactEmail(e.target.value)}
+                        placeholder="alamat@email.com"
+                        className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none transition-all duration-300"
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="contact-pesan" className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        Pesan Anda
+                      </label>
+                      <textarea
+                        id="contact-pesan"
+                        rows={3}
+                        required
+                        value={contactPesan}
+                        onChange={(e) => setContactPesan(e.target.value)}
+                        placeholder="Tulis pesan..."
+                        className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none transition-all duration-300 resize-none"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isContactSubmitting}
+                      className="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-indigo-600/10"
+                    >
+                      {isContactSubmitting ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Mengirim...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Send className="w-3.5 h-3.5" />
+                          <span>Kirim Pesan</span>
+                        </>
+                      )}
+                    </button>
+                  </form>
+                </div>
+              </section>
+            </div>
+
+          </div>
+
+        </div>
+
+        {/* LOKASI SAYA SECTION (Leaflet Live Map & Geo fallback) - Widened full-width section */}
+        <section id="location-section" className="p-6 rounded-3xl bg-slate-900/30 border border-white/5 space-y-4 backdrop-blur-md w-full">
+          <div className="flex items-center justify-between border-b border-slate-900 pb-2.5">
+            <div className="flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-rose-500 animate-bounce" />
+              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Lokasi Saya</h2>
+            </div>
+            <span className="text-[10px] text-rose-400 font-mono font-bold bg-rose-500/5 px-2.5 py-0.5 rounded border border-rose-500/10">
+              UNUGHA Cilacap
+            </span>
+          </div>
+
+          {/* Fallback GPS Info */}
+          {gpsError && (
+            <div className="p-2.5 px-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
+              <p className="font-semibold">{gpsError}</p>
+            </div>
+          )}
+
+          {/* Leaflet Live Map container */}
+          <div className="relative">
+            <div 
+              id="leaflet-map" 
+              className="h-60 sm:h-72 md:h-80 w-full rounded-2xl border border-slate-900/80 overflow-hidden relative z-10"
+              style={{ minHeight: '260px' }}
+            />
+            {/* Attribution footer overlay resembling standard leaflet maps */}
+            <div className="absolute bottom-1 right-2 z-20 text-[8px] text-slate-400 font-mono bg-slate-950/80 px-2 py-0.5 rounded border border-slate-900">
+              Leaflet | &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer" className="hover:underline">OpenStreetMap</a> contributors
+            </div>
           </div>
         </section>
 
-        {/* BOTTOM GRID: GUESTBOOK & CONTACT */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-4">
-
-          {/* REAL-TIME GUESTBOOK / BUKU TAMU (7 columns) */}
-          <section id="guestbook" className="lg:col-span-7 space-y-6">
-            <div className="border-b border-slate-900 pb-4">
-              <h2 className="text-2xl font-extrabold text-white flex items-center gap-2">
-                <span>Buku Tamu Interaktif</span>
-                <span className="text-[10px] bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded font-mono font-bold uppercase tracking-wider">
-                  Real-Time
-                </span>
-              </h2>
-              <p className="text-sm text-slate-400">Tinggalkan pesan dukungan, sapaan, atau masukan yang disinkronkan secara real-time melalui Firestore.</p>
-            </div>
-
-            {/* Guestbook Form */}
-            <form onSubmit={handlePostMessage} className="p-5 rounded-2xl bg-slate-900/30 border border-slate-800/60 space-y-4">
-              <div className="grid grid-cols-1 gap-4">
-                <div>
-                  <label htmlFor="nama" className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                    Nama Anda
-                  </label>
-                  <input
-                    id="nama"
-                    type="text"
-                    value={nama}
-                    onChange={(e) => setNama(e.target.value)}
-                    placeholder="Masukkan nama lengkap..."
-                    className="w-full bg-slate-950/70 border border-slate-800 focus:border-indigo-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none transition-colors"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="pesan" className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                    Isi Pesan
-                  </label>
-                  <textarea
-                    id="pesan"
-                    rows={3}
-                    value={pesan}
-                    onChange={(e) => setPesan(e.target.value)}
-                    placeholder="Tulis pesan atau masukan Anda..."
-                    className="w-full bg-slate-950/70 border border-slate-800 focus:border-indigo-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none transition-colors resize-none"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] disabled:bg-indigo-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Mengirimkan...</span>
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Kirim Pesan Buku Tamu</span>
-                  </>
-                )}
-              </button>
-            </form>
-
-            {/* Guestbook Entries Stream */}
-            <div className="space-y-3 max-h-96 overflow-y-auto pr-2 custom-scrollbar">
-              {isLoading ? (
-                <div className="p-8 text-center text-slate-400 flex flex-col items-center justify-center gap-3">
-                  <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
-                  <p className="text-xs font-mono">Menghubungkan ke Cloud Firestore...</p>
-                </div>
-              ) : messages.length === 0 ? (
-                <div className="p-8 text-center rounded-2xl border border-slate-900 bg-slate-950/30 text-slate-400">
-                  <p className="text-xs">Buku tamu masih kosong. Jadilah yang pertama meninggalkan pesan!</p>
-                </div>
-              ) : (
-                <AnimatePresence initial={false}>
-                  {messages.map((msg) => (
-                    <motion.div
-                      key={msg.id}
-                      initial={{ opacity: 0, y: 15 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.95 }}
-                      className="p-4 rounded-xl bg-slate-950/50 border border-slate-900 flex flex-col gap-1 hover:border-slate-800/80 transition-colors"
-                    >
-                      <div className="flex justify-between items-start gap-4">
-                        <span className="font-bold text-white text-xs flex items-center gap-1.5">
-                          <User className="w-3.5 h-3.5 text-indigo-400" />
-                          {msg.nama}
-                        </span>
-                        <span className="text-[9px] text-slate-500 font-mono">
-                          {new Date(msg.createdAt).toLocaleDateString('id-ID', {
-                            day: 'numeric',
-                            month: 'short',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-300 leading-relaxed pl-5 whitespace-pre-wrap">
-                        {msg.pesan}
-                      </p>
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-              )}
-            </div>
-          </section>
-
-          {/* CONTACT FORM (5 columns) */}
-          <section id="contact" className="lg:col-span-5 space-y-6">
-            <div className="border-b border-slate-900 pb-4">
-              <h2 className="text-2xl font-extrabold text-white">Hubungi Saya</h2>
-              <p className="text-sm text-slate-400">Kirimkan penawaran kerja sama atau project Anda.</p>
-            </div>
-
-            <form onSubmit={handleContactSubmit} className="p-5 rounded-2xl bg-slate-900/30 border border-slate-800/60 space-y-4">
-              <div className="space-y-3">
-                <div>
-                  <label htmlFor="contactName" className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                    Nama
-                  </label>
-                  <input
-                    id="contactName"
-                    type="text"
-                    required
-                    value={contactNama}
-                    onChange={(e) => setContactNama(e.target.value)}
-                    placeholder="Nama Lengkap..."
-                    className="w-full bg-slate-950/70 border border-slate-800 focus:border-indigo-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none transition-colors"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="contactEmail" className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                    Email
-                  </label>
-                  <input
-                    id="contactEmail"
-                    type="email"
-                    required
-                    value={contactEmail}
-                    onChange={(e) => setContactEmail(e.target.value)}
-                    placeholder="contoh@domain.com..."
-                    className="w-full bg-slate-950/70 border border-slate-800 focus:border-indigo-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none transition-colors"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="contactMsg" className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                    Isi Pesan / Kolaborasi
-                  </label>
-                  <textarea
-                    id="contactMsg"
-                    rows={3}
-                    required
-                    value={contactPesan}
-                    onChange={(e) => setContactPesan(e.target.value)}
-                    placeholder="Tuliskan tawaran atau rincian project Anda..."
-                    className="w-full bg-slate-950/70 border border-slate-800 focus:border-indigo-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none transition-colors resize-none"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isContactSubmitting}
-                className="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] disabled:bg-indigo-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {isContactSubmitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Sedang mengirimkan...</span>
-                  </>
-                ) : (
-                  <>
-                    <Mail className="w-3.5 h-3.5" />
-                    <span>Kirim Penawaran</span>
-                  </>
-                )}
-              </button>
-            </form>
-
-            {/* Quick Contact Info */}
-            <div className="p-4 rounded-xl bg-slate-950/40 border border-slate-900 space-y-3">
-              <h4 className="text-xs font-bold text-white uppercase tracking-wider">Kontak Langsung</h4>
-              <div className="space-y-2 text-xs text-slate-400">
-                <p className="flex items-center gap-2">
-                  <Mail className="w-4 h-4 text-indigo-400" />
-                  <span>habibihabibullah136@gmail.com</span>
-                </p>
-                <p className="flex items-center gap-2">
-                  <Smartphone className="w-4 h-4 text-emerald-400" />
-                  <span>085741027488</span>
-                </p>
-              </div>
-            </div>
-          </section>
-
-        </div>
+        {/* BRUTALIST SUB-FOOTER LOGO */}
+        <footer className="pt-4 pb-2 text-center border-t border-slate-900">
+          <p className="text-[10px] text-slate-500 font-mono">
+            Designed for Progressive Web Applications (PWA)
+          </p>
+          <p className="text-[11px] text-slate-400 font-bold tracking-tight mt-1">
+            &copy; 2026 Habibi Habibullah Hiroshi Nandes
+          </p>
+        </footer>
 
       </main>
 
-      {/* Footer */}
-      <footer className="mt-20 border-t border-slate-900 bg-slate-950/40 py-8">
-        <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
-          <div>
-            <p className="font-bold text-slate-400">Habibi Habibullah Portfolio</p>
-            <p className="mt-0.5">© 2026. All rights reserved. Full-Stack React PWA.</p>
-          </div>
-          <div className="flex gap-4">
-            <a 
-              href={portfolioConfig.githubUrl} 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="flex items-center gap-1.5 hover:text-white transition-colors"
-            >
-              <Github className="w-4 h-4" />
-              <span>GitHub</span>
-            </a>
-          </div>
-        </div>
-      </footer>
+      {/* LOGIN DIALOG / OVERLAY MODAL */}
+      <AnimatePresence>
+        {isLoginOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsLoginOpen(false)}
+              className="absolute inset-0 bg-slate-950/80 backdrop-blur-md"
+            />
 
+            {/* Modal Body */}
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="relative w-full max-w-sm rounded-3xl bg-[#0b0e1e] border border-white/5 p-6 shadow-2xl space-y-4 text-left overflow-hidden z-10"
+            >
+              {/* Decorative light effect */}
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent blur-[1px]" />
+              
+              <div className="text-center space-y-1">
+                <div className="w-10 h-10 rounded-xl bg-indigo-600/15 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto mb-2">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <h3 className="text-sm font-extrabold text-white font-sans">Sistem Login Portofolio</h3>
+                <p className="text-[10px] text-slate-400 leading-normal">Silakan login untuk mengedit atau menghapus artikel.</p>
+              </div>
+
+              <div className="space-y-3 pt-2">
+                {/* 1. Google Sign-In */}
+                <button
+                  onClick={handleGoogleLogin}
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-950 hover:bg-slate-900 border border-slate-900 flex items-center justify-center gap-2 text-xs font-bold text-slate-200 hover:text-white transition-all active:scale-[0.98] cursor-pointer"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path
+                      fill="currentColor"
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    />
+                    <path
+                      fill="currentColor"
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    />
+                    <path
+                      fill="currentColor"
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                    />
+                    <path
+                      fill="currentColor"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                    />
+                  </svg>
+                  <span>Login dengan Google</span>
+                </button>
+
+                <div className="relative flex py-1 items-center">
+                  <div className="flex-grow border-t border-slate-900/60"></div>
+                  <span className="flex-shrink mx-3 text-[9px] text-slate-500 font-mono uppercase">Atau</span>
+                  <div className="flex-grow border-t border-slate-900/60"></div>
+                </div>
+
+                {/* 2. Username & Password Login Form */}
+                <form onSubmit={handleDemoLoginSubmit} className="space-y-3.5">
+                  <div>
+                    <label htmlFor="demo-name" className="block text-[8px] font-bold text-slate-500 uppercase tracking-wider mb-1">Username / Email</label>
+                    <input
+                      id="demo-name"
+                      type="text"
+                      required
+                      value={demoLoginName}
+                      onChange={(e) => setDemoLoginName(e.target.value)}
+                      placeholder="e.g. habibi atau admin"
+                      className="w-full bg-slate-950/70 border border-slate-900 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs text-white focus:outline-none transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="demo-password" className="block text-[8px] font-bold text-slate-500 uppercase tracking-wider mb-1">Password</label>
+                    <div className="relative">
+                      <input
+                        id="demo-password"
+                        type={showPassword ? "text" : "password"}
+                        required
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        placeholder="Masukkan password..."
+                        className="w-full bg-slate-950/70 border border-slate-900 focus:border-indigo-500 rounded-xl pl-3 pr-10 py-2 text-xs text-white focus:outline-none transition-colors"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-indigo-400 transition-colors p-1"
+                        title={showPassword ? "Sembunyikan Password" : "Tampilkan Password"}
+                      >
+                        {showPassword ? (
+                          <EyeOff className="w-3.5 h-3.5" />
+                        ) : (
+                          <Eye className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold text-xs rounded-xl shadow-lg shadow-indigo-500/10 active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <User className="w-3.5 h-3.5" />
+                    <span>Masuk dengan Kredensial</span>
+                  </button>
+                </form>
+              </div>
+
+              {/* Close Button */}
+              <button
+                onClick={() => setIsLoginOpen(false)}
+                className="absolute top-2.5 right-2.5 p-1 rounded-full text-slate-500 hover:text-slate-300 hover:bg-slate-900 transition-all cursor-pointer"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

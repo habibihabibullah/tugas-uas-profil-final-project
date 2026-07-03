@@ -8,10 +8,12 @@ import {
   query, 
   orderBy, 
   Timestamp,
-  increment
+  increment,
+  updateDoc,
+  deleteDoc
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { GuestbookMessage, ProjectItem, PortfolioConfig } from '../types';
+import { GuestbookMessage, ProjectItem, PortfolioConfig, Article } from '../types';
 
 const GUESTBOOK_COLLECTION = 'guestbook';
 const LIKES_COLLECTION = 'likes';
@@ -294,3 +296,172 @@ export async function savePortfolioConfig(config: PortfolioConfig): Promise<void
     console.warn("Config saved locally. Firestore sync failed.", e);
   }
 }
+
+// --- ARTICLES SERVICE ---
+const ARTICLES_COLLECTION = 'articles';
+const LOCAL_ARTICLES_KEY = 'portfolio_articles_data';
+
+let activeArticlesListeners: ((data: Article[], source: 'firebase' | 'local') => void)[] = [];
+
+function notifyArticlesListeners(data: Article[], source: 'firebase' | 'local') {
+  activeArticlesListeners.forEach(l => {
+    try { l(data, source); } catch (e) { console.error(e); }
+  });
+}
+
+export function getLocalArticles(): Article[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_ARTICLES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    console.error("Failed to read articles from localStorage:", e);
+    return [];
+  }
+}
+
+export function saveLocalArticles(data: Article[]): void {
+  try {
+    localStorage.setItem(LOCAL_ARTICLES_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.error("Failed to write articles to localStorage:", e);
+  }
+}
+
+export function subscribeToArticles(
+  onUpdate: (data: Article[], source: 'firebase' | 'local') => void,
+  onError?: (error: Error) => void
+) {
+  activeArticlesListeners.push(onUpdate);
+
+  // Instantly return cache
+  onUpdate(getLocalArticles(), 'local');
+
+  try {
+    const q = query(collection(db, ARTICLES_COLLECTION), orderBy('createdAt', 'desc'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list: Article[] = [];
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        list.push({
+          id: doc.id,
+          title: data.title || '',
+          content: data.content || '',
+          createdAt: data.createdAt || new Date().toISOString()
+        });
+      });
+
+      if (list.length > 0) {
+        saveLocalArticles(list);
+      }
+      notifyArticlesListeners(list.length > 0 ? list : getLocalArticles(), 'firebase');
+    }, (error) => {
+      console.warn("Firestore articles snapshot failed:", error);
+      if (onError) onError(error);
+    });
+
+    return () => {
+      unsubscribe();
+      activeArticlesListeners = activeArticlesListeners.filter(l => l !== onUpdate);
+    };
+  } catch (error) {
+    console.error("Failed to setup real-time articles listener:", error);
+    if (onError) onError(error as Error);
+    return () => {
+      activeArticlesListeners = activeArticlesListeners.filter(l => l !== onUpdate);
+    };
+  }
+}
+
+export async function addArticle(
+  article: Omit<Article, 'id' | 'createdAt'>
+): Promise<{ id: string, source: 'firebase' | 'local' }> {
+  const newId = 'local-' + Date.now();
+  const newRecord: Article = {
+    id: newId,
+    title: article.title,
+    content: article.content,
+    createdAt: new Date().toISOString()
+  };
+
+  // 1. Instant local optimistic update
+  const current = getLocalArticles();
+  const updated = [newRecord, ...current];
+  saveLocalArticles(updated);
+  notifyArticlesListeners(updated, 'local');
+
+  // 2. Background Firestore sync
+  try {
+    const docRef = doc(collection(db, ARTICLES_COLLECTION));
+    await setDoc(docRef, {
+      title: article.title,
+      content: article.content,
+      createdAt: new Date().toISOString()
+    });
+
+    const synced = getLocalArticles().map(item => {
+      if (item.id === newId) return { ...item, id: docRef.id };
+      return item;
+    });
+    saveLocalArticles(synced);
+    notifyArticlesListeners(synced, 'firebase');
+
+    return { id: docRef.id, source: 'firebase' };
+  } catch (error) {
+    console.warn("Offline: Article stored locally. Syncing later.", error);
+    return { id: newId, source: 'local' };
+  }
+}
+
+export async function updateArticle(
+  articleId: string,
+  title: string,
+  content: string
+): Promise<boolean> {
+  const current = getLocalArticles();
+  const updated = current.map(item => {
+    if (item.id === articleId) {
+      return { ...item, title, content };
+    }
+    return item;
+  });
+  saveLocalArticles(updated);
+  notifyArticlesListeners(updated, 'local');
+
+  try {
+    if (!articleId.startsWith('local-')) {
+      const docRef = doc(db, ARTICLES_COLLECTION, articleId);
+      await updateDoc(docRef, {
+        title,
+        content
+      });
+    }
+    notifyArticlesListeners(updated, 'firebase');
+    return true;
+  } catch (error) {
+    console.warn("Failed to sync article update to Firestore:", error);
+    return false;
+  }
+}
+
+export async function deleteArticle(
+  articleId: string
+): Promise<boolean> {
+  const current = getLocalArticles();
+  const updated = current.filter(item => item.id !== articleId);
+  saveLocalArticles(updated);
+  notifyArticlesListeners(updated, 'local');
+
+  try {
+    if (!articleId.startsWith('local-')) {
+      const docRef = doc(db, ARTICLES_COLLECTION, articleId);
+      await deleteDoc(docRef);
+    }
+    notifyArticlesListeners(updated, 'firebase');
+    return true;
+  } catch (error) {
+    console.warn("Failed to sync article delete to Firestore:", error);
+    return false;
+  }
+}
+
