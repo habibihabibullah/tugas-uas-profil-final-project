@@ -1,0 +1,6 @@
+{
+  "name": "Portfolio PWA & Guestbook",
+  "description": "Website Portfolio Pribadi Modern Terintegrasi Cloud Firestore, PWA Offline Mode, dan Push Notification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

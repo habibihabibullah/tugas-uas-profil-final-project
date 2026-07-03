@@ -1,0 +1,66 @@
+{
+  "entities": {
+    "GuestbookMessage": {
+      "title": "GuestbookMessage",
+      "description": "Guestbook messages left by website visitors",
+      "type": "object",
+      "properties": {
+        "nama": {
+          "type": "string",
+          "description": "Visitor's name"
+        },
+        "pesan": {
+          "type": "string",
+          "description": "Message content"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["nama", "pesan"]
+    },
+    "ProjectLikes": {
+      "title": "ProjectLikes",
+      "description": "Interactive like counter for projects",
+      "type": "object",
+      "properties": {
+        "likes": {
+          "type": "integer",
+          "description": "Number of upvotes/likes"
+        }
+      },
+      "required": ["likes"]
+    },
+    "PortfolioConfig": {
+      "title": "PortfolioConfig",
+      "description": "Custom editable links for repository and deployment",
+      "type": "object",
+      "properties": {
+        "githubUrl": {
+          "type": "string",
+          "description": "GitHub Repository URL"
+        },
+        "deployUrl": {
+          "type": "string",
+          "description": "Live deployment URL"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "guestbook/{messageId}": {
+      "schema": "GuestbookMessage",
+      "description": "Collection of guestbook messages left by visitors"
+    },
+    "likes/{projectId}": {
+      "schema": "ProjectLikes",
+      "description": "Like counters for showcase projects"
+    },
+    "config/{configId}": {
+      "schema": "PortfolioConfig",
+      "description": "Custom settings for portfolio links"
+    }
+  }
+}

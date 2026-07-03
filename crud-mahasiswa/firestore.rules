@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global catch-all safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions for validation
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    
+    function isValidGuestbook(data) {
+      return data.nama is string && data.nama.size() >= 2 && data.nama.size() <= 100
+          && data.pesan is string && data.pesan.size() >= 2 && data.pesan.size() <= 1000;
+    }
+
+    function isValidLikes(data) {
+      return data.likes is int && data.likes >= 0 && data.likes <= 1000000;
+    }
+
+    // Guestbook collection rules
+    match /guestbook/{messageId} {
+      allow read: if true;
+      allow create: if isValidId(messageId) && isValidGuestbook(request.resource.data) 
+                    && request.resource.data.createdAt is string;
+      allow update, delete: if false; // Guestbook messages are write-once, never update or delete by public
+    }
+
+    // Project likes collection rules
+    match /likes/{projectId} {
+      allow read: if true;
+      allow write: if isValidId(projectId) && isValidLikes(request.resource.data);
+    }
+
+    // Portfolio configuration rules
+    match /config/{configId} {
+      allow read: if true;
+      allow write: if isValidId(configId);
+    }
+  }
+}
