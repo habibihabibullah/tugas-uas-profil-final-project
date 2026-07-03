@@ -66,6 +66,7 @@ import {
 
 // Import profile image from local assets
 import profileAvatar from './assets/images/profile_avatar_1782629622587.jpg';
+import profileAvatarAlt from './assets/images/profile_avatar_1782629622587_1783077283961.jpg';
 
 export default function App() {
   // Database / Real-time states
@@ -104,6 +105,26 @@ export default function App() {
 
   // Network Status State
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  // Profile image loader with fallbacks
+  const [profileImgSrc, setProfileImgSrc] = useState<string>(profileAvatar);
+  const [useFallbackAvatar, setUseFallbackAvatar] = useState(false);
+
+  const handleProfileImgError = () => {
+    if (profileImgSrc === profileAvatar) {
+      // Fallback 1: Try public folder absolute path of primary avatar
+      setProfileImgSrc('/profile_avatar_1782629622587.jpg');
+    } else if (profileImgSrc === '/profile_avatar_1782629622587.jpg') {
+      // Fallback 2: Try imported alt avatar
+      setProfileImgSrc(profileAvatarAlt);
+    } else if (profileImgSrc === profileAvatarAlt) {
+      // Fallback 3: Try public folder absolute path of alt avatar
+      setProfileImgSrc('/profile_avatar_1782629622587_1783077283961.jpg');
+    } else {
+      // Fallback 4: Fall back to clean initials avatar display
+      setUseFallbackAvatar(true);
+    }
+  };
 
   // Form states (Guestbook)
   const [nama, setNama] = useState('');
@@ -977,13 +998,19 @@ FAVORITE THINGS
       <header className="sticky top-0 z-40 backdrop-blur-xl bg-[#070914]/80 border-b border-slate-900/80 transition-all duration-300">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-full overflow-hidden border border-indigo-500/30 shadow-lg shadow-indigo-500/10">
-              <img 
-                src={profileAvatar} 
-                alt="Habibi Profile" 
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
+            <div className="w-9 h-9 rounded-full overflow-hidden border border-indigo-500/30 shadow-lg shadow-indigo-500/10 flex items-center justify-center bg-slate-950">
+              {!useFallbackAvatar ? (
+                <img 
+                  src={profileImgSrc} 
+                  alt="Habibi Profile" 
+                  className="w-full h-full object-cover"
+                  onError={handleProfileImgError}
+                />
+              ) : (
+                <div className="w-full h-full bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white font-sans">
+                  H
+                </div>
+              )}
             </div>
             <div>
               <p className="font-bold text-white tracking-tight text-xs leading-tight">Habibi Habibullah H.N.</p>
@@ -1097,13 +1124,19 @@ FAVORITE THINGS
                 {/* Custom Glowing Profile Image Container */}
                 <div className="relative">
                   <div className="absolute inset-0 bg-gradient-to-tr from-indigo-500 to-purple-600 rounded-full blur-md opacity-60 animate-pulse" />
-                  <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-indigo-500/80 bg-[#0c1024] p-1 shadow-2xl relative z-10">
-                    <img 
-                      src={profileAvatar} 
-                      alt="Habibi Habibullah" 
-                      className="w-full h-full object-cover rounded-full"
-                      referrerPolicy="no-referrer"
-                    />
+                  <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-indigo-500/80 bg-[#0c1024] p-1 shadow-2xl relative z-10 flex items-center justify-center">
+                    {!useFallbackAvatar ? (
+                      <img 
+                        src={profileImgSrc} 
+                        alt="Habibi Habibullah" 
+                        className="w-full h-full object-cover rounded-full"
+                        onError={handleProfileImgError}
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 rounded-full flex items-center justify-center text-3xl font-extrabold text-white font-sans tracking-wide shadow-inner">
+                        H
+                      </div>
+                    )}
                   </div>
                   <span className="absolute bottom-1 right-2 w-4.5 h-4.5 rounded-full bg-emerald-500 border-2 border-[#070914] z-20 flex items-center justify-center shadow-lg">
                     <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
