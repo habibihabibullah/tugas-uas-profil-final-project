@@ -6,7 +6,7 @@ import {
   Loader2, 
   AlertCircle, 
   CheckCircle2, 
-  Sparkles, 
+  Info, 
   Heart, 
   Send, 
   Github, 
@@ -47,6 +47,16 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [dbSource, setDbSource] = useState<'firebase' | 'local'>('local');
+
+  // Track liked projects to prevent double-upvoting
+  const [likedProjects, setLikedProjects] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('portfolio_liked_projects');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
 
   // Portfolio Configuration States (Dynamic GitHub & Live Deploy URLs)
   const [portfolioConfig, setPortfolioConfig] = useState<PortfolioConfig>({
@@ -304,8 +314,24 @@ export default function App() {
 
   // Handle liking a project (upvotes)
   const handleLikeProject = async (projectId: string, projectTitle: string) => {
+    if (likedProjects.includes(projectId)) {
+      setNotification({
+        type: 'info',
+        message: `Anda sudah memberikan upvote untuk "${projectTitle}"! 😊`
+      });
+      return;
+    }
+
     try {
       const newCount = await incrementProjectLike(projectId);
+      
+      const updatedLiked = [...likedProjects, projectId];
+      setLikedProjects(updatedLiked);
+      try {
+        localStorage.setItem('portfolio_liked_projects', JSON.stringify(updatedLiked));
+      } catch (err) {
+        console.warn("localStorage quota or access error:", err);
+      }
       
       setNotification({
         type: 'success',
@@ -469,7 +495,7 @@ export default function App() {
                 ) : notification.type === 'error' ? (
                   <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
                 ) : (
-                  <Sparkles className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
+                  <Info className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
                 )}
                 <div>
                   <p className="text-xs font-semibold">{notification.message}</p>
@@ -483,7 +509,7 @@ export default function App() {
         <section id="hero" className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center pt-4">
           <div className="md:col-span-7 space-y-6">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-bold uppercase tracking-wider">
-              <Sparkles className="w-3.5 h-3.5" />
+              <Layers className="w-3.5 h-3.5" />
               <span>Full-Stack & PWA Portfolio</span>
             </div>
 
@@ -561,12 +587,15 @@ export default function App() {
             
             <div className="w-full max-w-sm rounded-3xl bg-slate-900/60 border border-slate-800/80 p-6 shadow-xl space-y-6 backdrop-blur-sm">
               <div className="flex items-center gap-4">
-                <img 
-                  src={profileAvatar} 
-                  alt="Avatar" 
-                  className="w-16 h-16 rounded-2xl bg-indigo-950/50 p-2 border border-indigo-500/20 object-cover shadow-inner"
-                  referrerPolicy="no-referrer"
-                />
+                <div className="w-16 h-16 rounded-2xl overflow-hidden border border-indigo-500/30 bg-gradient-to-tr from-indigo-500 to-emerald-500 flex items-center justify-center font-extrabold text-xl text-white shadow-lg shrink-0 relative">
+                  <img 
+                    src={profileAvatar} 
+                    alt="Habibi Habibullah" 
+                    className="absolute inset-0 w-full h-full object-cover z-10"
+                    referrerPolicy="no-referrer"
+                  />
+                  <span className="z-0">HH</span>
+                </div>
                 <div>
                   <h3 className="text-lg font-bold text-white">Habibi Habibullah</h3>
                   <p className="text-xs text-indigo-400 font-mono">Backend & PWA Specialist</p>
@@ -598,10 +627,10 @@ export default function App() {
             <div>
               <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-[10px] font-bold uppercase tracking-wider mb-2">
                 <Code className="w-3.5 h-3.5" />
-                <span>Link Penilaian Tugas</span>
+                <span>Repository & URL Deploy</span>
               </div>
               <h2 className="text-xl font-bold text-white">Repository GitHub & URL Deploy</h2>
-              <p className="text-xs text-slate-400">Gunakan panel interaktif ini untuk menyimpan, menampilkan, dan menyalin link pengumpulan tugas Anda yang tersinkronisasi di Firestore.</p>
+              <p className="text-xs text-slate-400">Gunakan panel interaktif ini untuk menyimpan, menampilkan, dan menyalin link repository GitHub serta URL deploy yang tersinkronisasi di Firestore.</p>
             </div>
             
             <button
@@ -610,7 +639,7 @@ export default function App() {
               className="px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600/35 active:scale-95 text-xs font-bold rounded-xl border border-indigo-500/40 text-indigo-300 transition-all cursor-pointer flex items-center gap-2 shadow-lg shadow-indigo-500/10"
             >
               <Settings className="w-4 h-4 animate-[spin_8s_linear_infinite]" />
-              <span>{isEditingConfig ? 'Batal' : 'Edit Link Penilaian (Ikon Gerigi ⚙️)'}</span>
+              <span>{isEditingConfig ? 'Batal' : 'Repository GitHub & URL Deploy'}</span>
             </button>
           </div>
 
@@ -856,13 +885,19 @@ export default function App() {
                 className="rounded-3xl bg-slate-900/20 border border-slate-800/80 overflow-hidden flex flex-col justify-between hover:border-slate-700/80 transition-all shadow-xl group"
               >
                 <div>
-                  <div className="h-44 overflow-hidden relative">
+                  <div className="h-44 overflow-hidden relative border-b border-slate-900/60">
                     <img 
                       src={project.imageUrl} 
                       alt={project.title} 
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                       referrerPolicy="no-referrer"
                     />
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent" />
+                    
+                    <div className="absolute bottom-3 right-3 text-[10px] font-mono text-slate-300 bg-slate-950/80 backdrop-blur-md border border-slate-800/80 px-2 py-0.5 rounded font-semibold tracking-wider uppercase">
+                      {project.id === 'agritech' ? 'IoT Platform' : project.id === 'elearning' ? 'LMS Webapp' : 'CRUD System'}
+                    </div>
+
                     {/* Floating Tech Badges */}
                     <div className="absolute top-3 left-3 flex flex-wrap gap-1">
                       {project.tags.slice(0, 2).map((t) => (
@@ -887,10 +922,16 @@ export default function App() {
                   {/* Real-time Likes Button */}
                   <button
                     onClick={() => handleLikeProject(project.id, project.title)}
-                    className="flex items-center gap-1.5 text-xs text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 px-3 py-1.5 rounded-full border border-rose-500/10 hover:border-rose-500/20 transition-all active:scale-90 cursor-pointer font-bold"
+                    className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-all font-bold cursor-pointer ${
+                      likedProjects.includes(project.id)
+                        ? "text-white bg-rose-600/90 border-rose-500/80 shadow-md shadow-rose-600/20"
+                        : "text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border-rose-500/10 hover:border-rose-500/20 active:scale-90"
+                    }`}
                   >
-                    <Heart className="w-3.5 h-3.5 fill-rose-400" />
-                    <span>Upvote ({likes[project.id] !== undefined ? likes[project.id] : project.likes})</span>
+                    <Heart className={`w-3.5 h-3.5 ${likedProjects.includes(project.id) ? 'fill-white text-white' : 'fill-rose-400 text-rose-400'}`} />
+                    <span>
+                      {likedProjects.includes(project.id) ? 'Upvoted' : 'Upvote'} ({likes[project.id] !== undefined ? likes[project.id] : project.likes})
+                    </span>
                   </button>
 
                   <button
@@ -972,7 +1013,7 @@ export default function App() {
                 ) : (
                   <>
                     <Send className="w-3.5 h-3.5" />
-                    <span>Kirim Pesan Buku Tamu (Async)</span>
+                    <span>Kirim Pesan Buku Tamu</span>
                   </>
                 )}
               </button>
@@ -1092,7 +1133,7 @@ export default function App() {
                 ) : (
                   <>
                     <Mail className="w-3.5 h-3.5" />
-                    <span>Kirim Penawaran (Async)</span>
+                    <span>Kirim Penawaran</span>
                   </>
                 )}
               </button>
@@ -1108,7 +1149,7 @@ export default function App() {
                 </p>
                 <p className="flex items-center gap-2">
                   <Smartphone className="w-4 h-4 text-emerald-400" />
-                  <span>+62 812-3456-7890</span>
+                  <span>085741027488</span>
                 </p>
               </div>
             </div>
